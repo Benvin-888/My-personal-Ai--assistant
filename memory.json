@@ -1,0 +1,32 @@
+[
+    {
+        "id": "mem_dafa8b534539",
+        "content": "BENVIN is my personal AI assistant.",
+        "category": "fact",
+        "importance": 0.5,
+        "confidence": 1.0,
+        "source": "user",
+        "created_at": "2026-08-23T19:16:18.187790Z",
+        "updated_at": "2026-08-23T19:16:18.187790Z"
+    },
+    {
+        "id": "mem_9209f2cb37f5",
+        "content": "my favorite programming language is Python",
+        "category": "preference",
+        "importance": 0.5,
+        "confidence": 1.0,
+        "source": "user",
+        "created_at": "2026-08-23T19:16:18.188448Z",
+        "updated_at": "2026-08-23T19:16:18.188448Z"
+    },
+    {
+        "id": "mem_adcad1197046",
+        "content": "I am building BENVIN",
+        "category": "project",
+        "importance": 0.5,
+        "confidence": 1.0,
+        "source": "user",
+        "created_at": "2026-08-23T19:16:18.188513Z",
+        "updated_at": "2026-08-23T19:16:18.188513Z"
+    }
+]

@@ -22,9 +22,26 @@ def current_timestamp():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def normalize_text(text):
+    """
+    Normalize text into lowercase words.
+
+    Used by the memory search and similarity system.
+    """
+
+    return re.findall(
+        r"\b[a-zA-Z0-9]+\b",
+        text.lower()
+    )
+
+
+# ============================================================
+# MEMORY CLASSIFICATION
+# ============================================================
+
 def classify_memory(fact):
     """
-    Basic deterministic memory classification.
+    Deterministically classify a memory.
     """
 
     text = fact.lower()
@@ -64,14 +81,102 @@ def classify_memory(fact):
     return "fact"
 
 
+# ============================================================
+# MEMORY TOPICS
+# ============================================================
+
+def detect_topic(fact):
+    """
+    Detect the persistent topic represented by a memory.
+
+    This is deterministic for now.
+
+    Later we can make this more intelligent using
+    BENVIN/Qwen3-assisted topic extraction.
+    """
+
+    text = fact.lower()
+
+    # --------------------------------------------------------
+    # Preferences
+    # --------------------------------------------------------
+
+    if "favorite programming language" in text:
+        return "favorite_programming_language"
+
+    if "favorite color" in text:
+        return "favorite_color"
+
+    if "favorite food" in text:
+        return "favorite_food"
+
+    if "favorite game" in text:
+        return "favorite_game"
+
+    if "favorite movie" in text:
+        return "favorite_movie"
+
+    if "favorite book" in text:
+        return "favorite_book"
+
+    # --------------------------------------------------------
+    # Projects
+    # --------------------------------------------------------
+
+    if "building benvin" in text:
+        return "current_project_benvin"
+
+    if "building" in text:
+        return "current_project"
+
+    if "developing" in text:
+        return "current_project"
+
+    if "working on" in text:
+        return "current_project"
+
+    # --------------------------------------------------------
+    # Identity
+    # --------------------------------------------------------
+
+    if "my name is" in text:
+        return "user_name"
+
+    # --------------------------------------------------------
+    # Goals
+    # --------------------------------------------------------
+
+    if "my goal" in text:
+        return "user_goal"
+
+    if "want to" in text:
+        return "user_goal"
+
+    if "plan to" in text:
+        return "user_goal"
+
+    # --------------------------------------------------------
+    # No known topic
+    # --------------------------------------------------------
+
+    return None
+
+
+# ============================================================
+# CREATE MEMORY
+# ============================================================
+
 def create_memory(fact):
-    """Create a structured memory object."""
+    """
+    Create a structured memory object.
+    """
 
     timestamp = current_timestamp()
 
     return {
         "id": generate_id(),
         "content": fact,
+        "topic": detect_topic(fact),
         "category": classify_memory(fact),
         "importance": 0.5,
         "confidence": 1.0,
@@ -81,9 +186,32 @@ def create_memory(fact):
     }
 
 
+# ============================================================
+# MEMORY MIGRATION
+# ============================================================
+
 def migrate_memory(memory):
     """
-    Convert old BENVIN memory format into the new structure.
+    Convert old BENVIN memory formats into the current format.
+
+    Old format:
+
+        {
+            "fact": "..."
+        }
+
+    Current format:
+
+        {
+            "id": "...",
+            "content": "...",
+            "topic": "...",
+            "category": "...",
+            ...
+        }
+
+    Existing structured memories are preserved.
+    Missing topics are automatically added.
     """
 
     migrated = []
@@ -91,16 +219,79 @@ def migrate_memory(memory):
 
     for item in memory:
 
-        # Already using the new format
-        if "content" in item:
-            migrated.append(item)
+        # ----------------------------------------------------
+        # OLD FORMAT
+        # ----------------------------------------------------
+
+        if "fact" in item and "content" not in item:
+
+            new_memory = create_memory(
+                item["fact"]
+            )
+
+            migrated.append(new_memory)
+
+            changed = True
+
             continue
 
-        # Convert old {"fact": "..."} format
-        if "fact" in item:
-            new_memory = create_memory(item["fact"])
-            migrated.append(new_memory)
-            changed = True
+        # ----------------------------------------------------
+        # CURRENT FORMAT
+        # ----------------------------------------------------
+
+        if "content" in item:
+
+            # Add missing topic
+            if "topic" not in item:
+
+                item["topic"] = detect_topic(
+                    item["content"]
+                )
+
+                changed = True
+
+            # Ensure missing fields are restored
+            if "category" not in item:
+
+                item["category"] = classify_memory(
+                    item["content"]
+                )
+
+                changed = True
+
+            if "importance" not in item:
+
+                item["importance"] = 0.5
+
+                changed = True
+
+            if "confidence" not in item:
+
+                item["confidence"] = 1.0
+
+                changed = True
+
+            if "source" not in item:
+
+                item["source"] = "user"
+
+                changed = True
+
+            if "created_at" not in item:
+
+                item["created_at"] = current_timestamp()
+
+                changed = True
+
+            if "updated_at" not in item:
+
+                item["updated_at"] = (
+                    item["created_at"]
+                )
+
+                changed = True
+
+            migrated.append(item)
 
     return migrated, changed
 
@@ -110,19 +301,36 @@ def migrate_memory(memory):
 # ============================================================
 
 def load_memory():
-    """Load memories and automatically migrate old memories."""
+    """
+    Load memories from memory.json.
+
+    Automatically migrates old memory formats.
+    """
 
     if not os.path.exists(MEMORY_FILE):
         return []
 
     try:
-        with open(MEMORY_FILE, "r", encoding="utf-8") as file:
+
+        with open(
+            MEMORY_FILE,
+            "r",
+            encoding="utf-8"
+        ) as file:
+
             memory = json.load(file)
 
     except (json.JSONDecodeError, OSError):
+
         return []
 
-    memory, changed = migrate_memory(memory)
+    # Make sure the root is a list
+    if not isinstance(memory, list):
+        return []
+
+    memory, changed = migrate_memory(
+        memory
+    )
 
     if changed:
         save_memory(memory)
@@ -131,9 +339,16 @@ def load_memory():
 
 
 def save_memory(memory):
-    """Save memories to the local JSON file."""
+    """
+    Save memories to memory.json.
+    """
 
-    with open(MEMORY_FILE, "w", encoding="utf-8") as file:
+    with open(
+        MEMORY_FILE,
+        "w",
+        encoding="utf-8"
+    ) as file:
+
         json.dump(
             memory,
             file,
@@ -143,7 +358,7 @@ def save_memory(memory):
 
 
 # ============================================================
-# CREATE MEMORY
+# CREATE / REMEMBER
 # ============================================================
 
 def remember(
@@ -155,18 +370,33 @@ def remember(
     """
     Store a new memory.
 
-    Returns the created memory.
+    Prevents exact duplicate memories.
+
+    Returns:
+        Existing or newly created memory.
     """
 
     memory = load_memory()
 
-    # Prevent exact duplicate memories
+    normalized_fact = fact.lower().strip()
+
+    # --------------------------------------------------------
+    # Exact duplicate prevention
+    # --------------------------------------------------------
+
     for existing in memory:
 
-        if existing["content"].lower().strip() == fact.lower().strip():
+        if existing["content"].lower().strip() == normalized_fact:
+
             return existing
 
-    new_memory = create_memory(fact)
+    # --------------------------------------------------------
+    # Create new memory
+    # --------------------------------------------------------
+
+    new_memory = create_memory(
+        fact
+    )
 
     if category:
         new_memory["category"] = category
@@ -174,9 +404,13 @@ def remember(
     new_memory["importance"] = importance
     new_memory["confidence"] = confidence
 
-    memory.append(new_memory)
+    memory.append(
+        new_memory
+    )
 
-    save_memory(memory)
+    save_memory(
+        memory
+    )
 
     return new_memory
 
@@ -186,7 +420,9 @@ def remember(
 # ============================================================
 
 def get_memories():
-    """Return all stored memories."""
+    """
+    Return all stored memories.
+    """
 
     return load_memory()
 
@@ -200,23 +436,28 @@ def search_memories(query):
     Search memories using normalized keyword matching.
 
     Features:
-    - Removes punctuation
-    - Removes common stop words
-    - Matches meaningful words
-    - Scores relevance
-    - Uses memory importance as a ranking boost
 
-    This is the foundation for future semantic/vector search.
+    - punctuation normalization
+    - stop-word removal
+    - meaningful word matching
+    - relevance scoring
+    - importance boost
+    - confidence boost
+
+    This is the foundation for future
+    semantic/vector memory retrieval.
     """
 
     memories = load_memory()
 
-    # Normalize query and extract words
     query_words = set(
-        re.findall(r"\b[a-zA-Z0-9]+\b", query.lower())
+        normalize_text(query)
     )
 
-    # Common words that don't help identify memories
+    # --------------------------------------------------------
+    # Stop words
+    # --------------------------------------------------------
+
     stop_words = {
         "what",
         "is",
@@ -244,7 +485,12 @@ def search_memories(query):
         "when",
         "where",
         "which",
-        "who"
+        "who",
+        "to",
+        "of",
+        "on",
+        "in",
+        "for"
     }
 
     query_words -= stop_words
@@ -254,30 +500,67 @@ def search_memories(query):
 
     results = []
 
+    # --------------------------------------------------------
+    # Search every memory
+    # --------------------------------------------------------
+
     for memory in memories:
 
-        content = memory["content"].lower()
-
         content_words = set(
-            re.findall(r"\b[a-zA-Z0-9]+\b", content)
+            normalize_text(
+                memory["content"]
+            )
         )
 
-        matched_words = query_words.intersection(content_words)
+        matched_words = (
+            query_words.intersection(
+                content_words
+            )
+        )
 
-        if matched_words:
+        if not matched_words:
+            continue
 
-            # Base relevance score
-            score = len(matched_words)
+        # Number of matching words
+        match_score = len(
+            matched_words
+        )
 
-            # Small importance boost
-            score += memory.get("importance", 0.5) * 0.1
+        # Query coverage
+        coverage = (
+            match_score
+            / len(query_words)
+        )
 
-            results.append({
-                "score": score,
-                "memory": memory
-            })
+        # Importance
+        importance = memory.get(
+            "importance",
+            0.5
+        )
 
+        # Confidence
+        confidence = memory.get(
+            "confidence",
+            1.0
+        )
+
+        # Final relevance score
+        score = (
+            match_score
+            + (coverage * 0.5)
+            + (importance * 0.1)
+            + (confidence * 0.1)
+        )
+
+        results.append({
+            "score": score,
+            "memory": memory
+        })
+
+    # --------------------------------------------------------
     # Highest relevance first
+    # --------------------------------------------------------
+
     results.sort(
         key=lambda item: item["score"],
         reverse=True
@@ -290,16 +573,234 @@ def search_memories(query):
 
 
 # ============================================================
+# FIND MEMORY
+# ============================================================
+
+def find_memory(query):
+    """
+    Find the most relevant memory.
+
+    Returns:
+        memory object
+        or None
+    """
+
+    results = search_memories(
+        query
+    )
+
+    if not results:
+        return None
+
+    return results[0]
+
+
+# ============================================================
+# FIND MEMORY BY TOPIC
+# ============================================================
+
+def find_memory_by_topic(topic):
+    """
+    Find a memory using its persistent topic.
+
+    Example:
+
+        find_memory_by_topic(
+            "favorite_programming_language"
+        )
+    """
+
+    memories = load_memory()
+
+    for memory in memories:
+
+        if memory.get("topic") == topic:
+
+            return memory
+
+    return None
+
+
+# ============================================================
+# CALCULATE MEMORY SIMILARITY
+# ============================================================
+
+def calculate_similarity(text_a, text_b):
+    """
+    Calculate a simple word-based similarity score.
+
+    Returns a value between 0.0 and 1.0.
+    """
+
+    words_a = set(
+        normalize_text(text_a)
+    )
+
+    words_b = set(
+        normalize_text(text_b)
+    )
+
+    if not words_a or not words_b:
+        return 0.0
+
+    intersection = words_a.intersection(
+        words_b
+    )
+
+    union = words_a.union(
+        words_b
+    )
+
+    return len(intersection) / len(union)
+
+
+# ============================================================
+# REMEMBER OR UPDATE
+# ============================================================
+
+def remember_or_update(
+    fact,
+    category=None,
+    importance=0.5,
+    confidence=1.0
+):
+    """
+    Store a new memory or update an existing
+    strongly matching memory.
+
+    Topic matching is preferred over
+    general text similarity.
+    """
+
+    # --------------------------------------------------------
+    # Determine topic
+    # --------------------------------------------------------
+
+    topic = detect_topic(
+        fact
+    )
+
+    # --------------------------------------------------------
+    # First try exact topic matching
+    # --------------------------------------------------------
+
+    if topic:
+
+        existing = find_memory_by_topic(
+            topic
+        )
+
+        if existing:
+
+            updated = update_memory(
+                existing["id"],
+                content=fact,
+                topic=topic,
+                category=(
+                    category
+                    or existing.get(
+                        "category",
+                        "fact"
+                    )
+                ),
+                importance=importance,
+                confidence=confidence
+            )
+
+            return {
+                "action": "updated",
+                "memory": updated
+            }
+
+    # --------------------------------------------------------
+    # No topic match — use similarity
+    # --------------------------------------------------------
+
+    memories = load_memory()
+
+    best_memory = None
+    best_score = 0.0
+
+    for memory in memories:
+
+        similarity = calculate_similarity(
+            fact,
+            memory["content"]
+        )
+
+        if similarity > best_score:
+
+            best_score = similarity
+            best_memory = memory
+
+    # --------------------------------------------------------
+    # Similarity threshold
+    # --------------------------------------------------------
+
+    UPDATE_THRESHOLD = 0.40
+
+    if (
+        best_memory
+        and best_score >= UPDATE_THRESHOLD
+    ):
+
+        updated = update_memory(
+            best_memory["id"],
+            content=fact,
+            topic=(
+                topic
+                or best_memory.get("topic")
+            ),
+            category=(
+                category
+                or best_memory.get(
+                    "category",
+                    "fact"
+                )
+            ),
+            importance=importance,
+            confidence=confidence
+        )
+
+        return {
+            "action": "updated",
+            "memory": updated
+        }
+
+    # --------------------------------------------------------
+    # Otherwise create new memory
+    # --------------------------------------------------------
+
+    new_memory = remember(
+        fact,
+        category=category,
+        importance=importance,
+        confidence=confidence
+    )
+
+    return {
+        "action": "created",
+        "memory": new_memory
+    }
+
+
+# ============================================================
 # UPDATE MEMORY
 # ============================================================
 
-def update_memory(memory_id, **updates):
-    """Update an existing memory."""
+def update_memory(
+    memory_id,
+    **updates
+):
+    """
+    Update an existing memory.
+    """
 
     memory = load_memory()
 
     allowed_fields = {
         "content",
+        "topic",
         "category",
         "importance",
         "confidence"
@@ -312,11 +813,16 @@ def update_memory(memory_id, **updates):
             for key, value in updates.items():
 
                 if key in allowed_fields:
+
                     item[key] = value
 
-            item["updated_at"] = current_timestamp()
+            item["updated_at"] = (
+                current_timestamp()
+            )
 
-            save_memory(memory)
+            save_memory(
+                memory
+            )
 
             return item
 
@@ -328,7 +834,13 @@ def update_memory(memory_id, **updates):
 # ============================================================
 
 def delete_memory(memory_id):
-    """Delete a memory by its ID."""
+    """
+    Delete a memory by ID.
+
+    Returns:
+        True  -> deleted
+        False -> memory not found
+    """
 
     memory = load_memory()
 
@@ -339,8 +851,11 @@ def delete_memory(memory_id):
     ]
 
     if len(new_memory) == len(memory):
+
         return False
 
-    save_memory(new_memory)
+    save_memory(
+        new_memory
+    )
 
     return True

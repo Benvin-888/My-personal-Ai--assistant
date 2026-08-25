@@ -4,6 +4,7 @@ BENVIN Tool Registry
 The registry is the single source of truth for BENVIN's tools.
 
 Every tool registered here contains:
+
     - action name
     - description
     - risk level
@@ -11,8 +12,24 @@ Every tool registered here contains:
     - parameter definitions
     - enabled state
 
-Other BENVIN layers should use this registry rather than
-maintaining separate tool definitions.
+IMPORTANT:
+
+Other BENVIN layers should NOT independently decide which
+tools exist.
+
+They should use this registry.
+
+Architecture:
+
+    registry.py
+         ↓
+    ┌────┼───────────────┐
+    ↓    ↓               ↓
+validator permissions   brain
+    ↓                    ↓
+ executor            tool context
+    ↓
+ actual tools
 """
 
 
@@ -22,36 +39,45 @@ maintaining separate tool definitions.
 
 TOOL_REGISTRY = {
 
-    # --------------------------------------------------------
+    # ========================================================
     # SYSTEM
-    # --------------------------------------------------------
+    # ========================================================
 
     "system_info": {
         "description": (
             "Get information about the computer, "
             "operating system, hardware, Python version, "
-            "and current user."
+            "computer name, and current user."
         ),
+
         "risk": "LOW",
+
         "requires_confirmation": False,
+
         "enabled": True,
 
         "parameters": {}
     },
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # FILESYSTEM
-    # --------------------------------------------------------
+    # ========================================================
 
     "list_directory": {
         "description": (
-            "List files and folders inside a directory."
+            "List files and folders inside an allowed "
+            "BENVIN filesystem directory."
         ),
+
         "risk": "LOW",
+
         "requires_confirmation": False,
+
         "enabled": True,
 
         "parameters": {
+
             "path": {
                 "type": "string",
                 "required": True,
@@ -62,75 +88,131 @@ TOOL_REGISTRY = {
         }
     },
 
+
     "find_file": {
         "description": (
-            "Search for files and folders."
+            "Search for a file by name inside an allowed "
+            "BENVIN filesystem directory."
         ),
+
         "risk": "LOW",
+
         "requires_confirmation": False,
+
         "enabled": True,
 
         "parameters": {
-            "name": {
+
+            "filename": {
                 "type": "string",
                 "required": True,
                 "description": (
-                    "File or folder name to search for."
+                    "File name to search for."
+                )
+            },
+
+            "search_root": {
+                "type": "string",
+                "required": False,
+                "description": (
+                    "Directory where the search should begin."
                 )
             }
         }
     },
 
+
     "path_exists": {
         "description": (
-            "Check whether a file or folder exists."
+            "Check whether an allowed file or directory "
+            "exists."
         ),
+
         "risk": "LOW",
+
         "requires_confirmation": False,
+
         "enabled": True,
 
         "parameters": {
+
             "path": {
                 "type": "string",
                 "required": True,
                 "description": (
-                    "Path to check."
+                    "File or directory path to check."
                 )
             }
         }
     },
 
-    # --------------------------------------------------------
-    # APPLICATIONS
-    # --------------------------------------------------------
 
-    "open_application": {
+    "get_file_info": {
         "description": (
-            "Open an approved application on the computer."
+            "Get basic information about an allowed file "
+            "or directory, including its name, type, path, "
+            "and file size."
         ),
+
         "risk": "LOW",
+
         "requires_confirmation": False,
+
         "enabled": True,
 
         "parameters": {
+
+            "path": {
+                "type": "string",
+                "required": True,
+                "description": (
+                    "File or directory path to inspect."
+                )
+            }
+        }
+    },
+
+
+    # ========================================================
+    # APPLICATIONS
+    # ========================================================
+
+    "open_application": {
+        "description": (
+            "Open an approved application on the "
+            "Windows computer."
+        ),
+
+        "risk": "LOW",
+
+        "requires_confirmation": False,
+
+        "enabled": True,
+
+        "parameters": {
+
             "application": {
                 "type": "string",
                 "required": True,
                 "description": (
-                    "Name or alias of the application "
-                    "to open."
+                    "Name or approved alias of the "
+                    "application to open."
                 )
             }
         }
     },
 
+
     "list_applications": {
         "description": (
-            "List applications BENVIN is allowed "
-            "to launch."
+            "List applications BENVIN is currently "
+            "allowed to launch."
         ),
+
         "risk": "LOW",
+
         "requires_confirmation": False,
+
         "enabled": True,
 
         "parameters": {}
@@ -150,7 +232,12 @@ def get_tool(action):
         dict | None
     """
 
-    return TOOL_REGISTRY.get(action)
+    if not isinstance(action, str):
+        return None
+
+    return TOOL_REGISTRY.get(
+        action.strip()
+    )
 
 
 # ============================================================
@@ -167,7 +254,10 @@ def tool_exists(action):
     if tool is None:
         return False
 
-    return tool.get("enabled", False)
+    return tool.get(
+        "enabled",
+        False
+    )
 
 
 # ============================================================
@@ -196,7 +286,7 @@ def is_tool_enabled(action):
 
 def get_tool_description(action):
     """
-    Return the description of a tool.
+    Return the description of a registered tool.
     """
 
     tool = get_tool(action)
@@ -215,7 +305,7 @@ def get_tool_description(action):
 
 def get_tool_risk(action):
     """
-    Return the configured risk level.
+    Return the configured risk level of a tool.
     """
 
     tool = get_tool(action)
@@ -251,12 +341,12 @@ def tool_requires_confirmation(action):
 
 
 # ============================================================
-# GET PARAMETERS
+# GET TOOL PARAMETERS
 # ============================================================
 
 def get_tool_parameters(action):
     """
-    Return the parameter schema for a tool.
+    Return the parameter schema for the registered tool.
     """
 
     tool = get_tool(action)
@@ -291,12 +381,41 @@ def list_tools():
 
 
 # ============================================================
+# LIST ALL TOOLS
+# ============================================================
+
+def list_all_tools():
+    """
+    Return the names of all registered tools,
+    including disabled tools.
+    """
+
+    return list(
+        TOOL_REGISTRY.keys()
+    )
+
+
+# ============================================================
+# GET ENABLED TOOL COUNT
+# ============================================================
+
+def get_tool_count():
+    """
+    Return the number of enabled tools.
+    """
+
+    return len(
+        list_tools()
+    )
+
+
+# ============================================================
 # GET REGISTRY
 # ============================================================
 
 def get_registry():
     """
-    Return the complete tool registry.
+    Return a shallow copy of the complete tool registry.
     """
 
     return TOOL_REGISTRY.copy()

@@ -1,12 +1,42 @@
 """
-BENVIN Application Manager
+BENVIN Application Tools
 
-Provides controlled access to approved Windows applications.
+Safe application discovery and launching.
+
+Available operations:
+
+    list_applications()
+    open_application(application)
 
 IMPORTANT:
-BENVIN does not execute arbitrary shell commands.
-Applications must exist in the allowlist below.
+
+    The LLM never directly launches applications.
+
+    The execution pipeline is:
+
+        Brain
+            ↓
+        Validator
+            ↓
+        Permission Engine
+            ↓
+        Executor
+            ↓
+        Application Tool
+
+SECURITY MODEL:
+
+    BENVIN does NOT execute arbitrary executable paths.
+
+    Applications must be explicitly defined in
+    APPROVED_APPLICATIONS.
+
+    User input is treated as an application name or alias,
+    never as a shell command.
+
+    subprocess is used without shell=True.
 """
+
 
 import os
 import shutil
@@ -15,20 +45,26 @@ from pathlib import Path
 
 
 # ============================================================
+# CONFIGURATION
+# ============================================================
+
+WINDOWS = os.name == "nt"
+
+
+# ============================================================
 # APPROVED APPLICATIONS
 # ============================================================
 
-APPLICATIONS = {
+APPROVED_APPLICATIONS = {
     "notepad": {
         "name": "Notepad",
         "aliases": [
             "notepad",
             "text editor",
-            "editor"
         ],
-        "executables": [
-            "notepad.exe"
-        ]
+        "commands": [
+            ["notepad.exe"],
+        ],
     },
 
     "calculator": {
@@ -36,23 +72,102 @@ APPLICATIONS = {
         "aliases": [
             "calculator",
             "calc",
-            "windows calculator"
         ],
-        "executables": [
-            "calc.exe"
-        ]
+        "commands": [
+            ["calc.exe"],
+        ],
     },
 
-    "explorer": {
+    "paint": {
+        "name": "Paint",
+        "aliases": [
+            "paint",
+            "mspaint",
+        ],
+        "commands": [
+            ["mspaint.exe"],
+        ],
+    },
+
+    "file explorer": {
         "name": "File Explorer",
         "aliases": [
-            "explorer",
             "file explorer",
-            "windows explorer"
+            "explorer",
+            "windows explorer",
         ],
-        "executables": [
-            "explorer.exe"
-        ]
+        "commands": [
+            ["explorer.exe"],
+        ],
+    },
+
+    "command prompt": {
+        "name": "Command Prompt",
+        "aliases": [
+            "command prompt",
+            "cmd",
+        ],
+        "commands": [
+            ["cmd.exe"],
+        ],
+    },
+
+    "powershell": {
+        "name": "PowerShell",
+        "aliases": [
+            "powershell",
+            "power shell",
+        ],
+        "commands": [
+            ["powershell.exe"],
+        ],
+    },
+
+    "chrome": {
+        "name": "Google Chrome",
+        "aliases": [
+            "chrome",
+            "google chrome",
+        ],
+        "commands": [
+            [
+                os.path.expandvars(
+                    r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"
+                )
+            ],
+            [
+                os.path.expandvars(
+                    r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
+                )
+            ],
+            [
+                os.path.expandvars(
+                    r"%LocalAppData%\Google\Chrome\Application\chrome.exe"
+                )
+            ],
+            ["chrome.exe"],
+        ],
+    },
+
+    "edge": {
+        "name": "Microsoft Edge",
+        "aliases": [
+            "edge",
+            "microsoft edge",
+        ],
+        "commands": [
+            [
+                os.path.expandvars(
+                    r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"
+                )
+            ],
+            [
+                os.path.expandvars(
+                    r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"
+                )
+            ],
+            ["msedge.exe"],
+        ],
     },
 
     "vscode": {
@@ -61,223 +176,180 @@ APPLICATIONS = {
             "vscode",
             "vs code",
             "visual studio code",
-            "code"
+            "code",
         ],
-        "executables": [
-            "code.exe",
-            "Code.exe"
-        ]
+        "commands": [
+            [
+                os.path.expandvars(
+                    r"%LocalAppData%\Programs\Microsoft VS Code\Code.exe"
+                )
+            ],
+            [
+                os.path.expandvars(
+                    r"%ProgramFiles%\Microsoft VS Code\Code.exe"
+                )
+            ],
+            ["code.exe"],
+        ],
     },
-
-    "chrome": {
-        "name": "Google Chrome",
-        "aliases": [
-            "chrome",
-            "google chrome"
-        ],
-        "executables": [
-            "chrome.exe"
-        ]
-    }
 }
 
 
 # ============================================================
-# FIND EXECUTABLE
+# INTERNAL HELPERS
 # ============================================================
 
-def find_executable(executable_name):
+def _normalize_name(value):
     """
-    Find an approved executable.
+    Normalize an application name for safe comparison.
 
-    Search order:
-    1. Windows PATH
-    2. Known installation locations
+    Returns:
+        str
     """
 
-    # --------------------------------------------------------
-    # 1. Search PATH
-    # --------------------------------------------------------
+    if not isinstance(
+        value,
+        str
+    ):
+        return ""
 
-    path_result = shutil.which(executable_name)
-
-    if path_result:
-        return path_result
-
-    # --------------------------------------------------------
-    # 2. Environment variables
-    # --------------------------------------------------------
-
-    local_app_data = Path(
-        os.environ.get(
-            "LOCALAPPDATA",
-            ""
-        )
+    return " ".join(
+        value.strip().lower().split()
     )
 
-    program_files = Path(
-        os.environ.get(
-            "PROGRAMFILES",
-            "C:\\Program Files"
-        )
+
+def _find_application_key(application):
+    """
+    Find the canonical application key from an
+    application name or alias.
+
+    Returns:
+        str | None
+    """
+
+    normalized = _normalize_name(
+        application
     )
 
-    program_files_x86 = Path(
-        os.environ.get(
-            "PROGRAMFILES(X86)",
-            "C:\\Program Files (x86)"
+    if not normalized:
+        return None
+
+    for key, definition in APPROVED_APPLICATIONS.items():
+
+        if normalized == _normalize_name(key):
+
+            return key
+
+        aliases = definition.get(
+            "aliases",
+            []
         )
-    )
 
-    # --------------------------------------------------------
-    # 3. Known locations
-    # --------------------------------------------------------
+        for alias in aliases:
 
-    candidates = [
-        local_app_data
-        / "Programs"
-        / "Microsoft VS Code"
-        / executable_name,
+            if normalized == _normalize_name(alias):
 
-        local_app_data
-        / "Programs"
-        / "Microsoft VS Code"
-        / "bin"
-        / executable_name,
-
-        program_files
-        / "Google"
-        / "Chrome"
-        / "Application"
-        / executable_name,
-
-        program_files_x86
-        / "Google"
-        / "Chrome"
-        / "Application"
-        / executable_name
-    ]
-
-    for candidate in candidates:
-        try:
-            if candidate.is_file():
-                return str(candidate)
-        except OSError:
-            continue
+                return key
 
     return None
 
 
-# ============================================================
-# RESOLVE APPLICATION
-# ============================================================
-
-def resolve_application(application):
+def _resolve_command(command):
     """
-    Convert a user-provided application name into
-    an approved application definition.
-    """
+    Resolve an approved command.
 
-    if not application:
-        return None, None
+    Commands may contain:
 
-    text = application.lower().strip()
+        - absolute executable paths
+        - executable names available on PATH
 
-    # Direct application ID
-    if text in APPLICATIONS:
-        return text, APPLICATIONS[text]
-
-    # Alias lookup
-    for key, definition in APPLICATIONS.items():
-
-        for alias in definition["aliases"]:
-
-            if text == alias.lower():
-                return key, definition
-
-    return None, None
-
-
-# ============================================================
-# OPEN APPLICATION
-# ============================================================
-
-def open_application(application):
-    """
-    Open an approved Windows application.
-
-    Returns a structured result dictionary.
+    Returns:
+        list[str] | None
     """
 
-    key, definition = resolve_application(
-        application
+    if not isinstance(
+        command,
+        list
+    ):
+        return None
+
+    if not command:
+        return None
+
+    executable = command[0]
+
+    if not isinstance(
+        executable,
+        str
+    ):
+        return None
+
+    executable = os.path.expandvars(
+        executable
     )
 
-    if definition is None:
-        return {
-            "success": False,
-            "error": (
-                f"Application '{application}' "
-                "is not approved by BENVIN."
-            )
-        }
-
-    executable_path = None
-
     # --------------------------------------------------------
-    # Find executable
+    # Absolute executable path
     # --------------------------------------------------------
 
-    for executable in definition["executables"]:
+    executable_path = Path(
+        executable
+    )
 
-        executable_path = find_executable(
-            executable
+    if executable_path.is_absolute():
+
+        if executable_path.exists() and executable_path.is_file():
+
+            return [
+                str(executable_path),
+                *command[1:]
+            ]
+
+        return None
+
+    # --------------------------------------------------------
+    # Executable available on PATH
+    # --------------------------------------------------------
+
+    resolved = shutil.which(
+        executable
+    )
+
+    if resolved:
+
+        return [
+            resolved,
+            *command[1:]
+        ]
+
+    return None
+
+
+def _get_available_command(definition):
+    """
+    Find the first working command for an approved
+    application definition.
+
+    Returns:
+        list[str] | None
+    """
+
+    commands = definition.get(
+        "commands",
+        []
+    )
+
+    for command in commands:
+
+        resolved = _resolve_command(
+            command
         )
 
-        if executable_path:
-            break
+        if resolved:
 
-    # --------------------------------------------------------
-    # Executable not found
-    # --------------------------------------------------------
+            return resolved
 
-    if executable_path is None:
-        return {
-            "success": False,
-            "application": definition["name"],
-            "error": (
-                f"Could not locate "
-                f"{definition['name']} "
-                "on this computer."
-            )
-        }
-
-    # --------------------------------------------------------
-    # Launch application
-    # --------------------------------------------------------
-
-    try:
-
-        process = subprocess.Popen(
-            [executable_path],
-            shell=False
-        )
-
-        return {
-            "success": True,
-            "application": definition["name"],
-            "application_id": key,
-            "executable": executable_path,
-            "process_id": process.pid
-        }
-
-    except OSError as error:
-
-        return {
-            "success": False,
-            "application": definition["name"],
-            "error": str(error)
-        }
+    return None
 
 
 # ============================================================
@@ -286,46 +358,227 @@ def open_application(application):
 
 def list_applications():
     """
-    Return all applications BENVIN is currently
-    allowed to launch.
+    Return the applications BENVIN is allowed to launch.
+
+    The result also indicates whether an executable
+    was found on the current computer.
+
+    Returns:
+        dict
     """
 
     applications = []
 
-    for key, definition in APPLICATIONS.items():
+    for key, definition in APPROVED_APPLICATIONS.items():
+
+        command = _get_available_command(
+            definition
+        )
 
         applications.append({
             "id": key,
-            "name": definition["name"],
-            "aliases": definition["aliases"]
+            "name": definition.get(
+                "name",
+                key
+            ),
+            "aliases": definition.get(
+                "aliases",
+                []
+            ),
+            "available": command is not None
         })
 
     return {
         "success": True,
+        "count": len(applications),
         "applications": applications
     }
 
 
 # ============================================================
-# CHECK APPLICATION
+# OPEN APPLICATION
 # ============================================================
 
-def application_available(application):
+def open_application(application):
     """
-    Check whether an approved application exists
-    on the computer without launching it.
+    Open an approved application.
+
+    Parameters:
+        application (str):
+            Application name or approved alias.
+
+    Returns:
+        dict
+
+    Security:
+
+        - Only allowlisted applications can launch.
+        - No shell commands are accepted.
+        - shell=True is never used.
+        - Arbitrary executable paths are rejected.
     """
 
-    key, definition = resolve_application(
+    # --------------------------------------------------------
+    # Validate input
+    # --------------------------------------------------------
+
+    if not isinstance(
+        application,
+        str
+    ):
+
+        return {
+            "success": False,
+            "error": (
+                "Application name must be a string."
+            )
+        }
+
+    application = application.strip()
+
+    if not application:
+
+        return {
+            "success": False,
+            "error": (
+                "Application name cannot be empty."
+            )
+        }
+
+    # --------------------------------------------------------
+    # Find approved application
+    # --------------------------------------------------------
+
+    application_key = _find_application_key(
         application
     )
 
-    if definition is None:
-        return False
+    if application_key is None:
 
-    for executable in definition["executables"]:
+        return {
+            "success": False,
+            "error": (
+                f"Application '{application}' "
+                "is not approved by BENVIN."
+            )
+        }
 
-        if find_executable(executable):
-            return True
+    definition = APPROVED_APPLICATIONS[
+        application_key
+    ]
 
-    return False
+    # --------------------------------------------------------
+    # Find executable
+    # --------------------------------------------------------
+
+    command = _get_available_command(
+        definition
+    )
+
+    if command is None:
+
+        return {
+            "success": False,
+            "application": definition.get(
+                "name",
+                application_key
+            ),
+            "error": (
+                f"The approved application "
+                f"'{definition.get('name', application_key)}' "
+                "could not be found on this computer."
+            )
+        }
+
+    # --------------------------------------------------------
+    # Windows check
+    # --------------------------------------------------------
+
+    if not WINDOWS:
+
+        return {
+            "success": False,
+            "application": definition.get(
+                "name",
+                application_key
+            ),
+            "error": (
+                "BENVIN Phase 1 application control "
+                "currently supports Windows only."
+            )
+        }
+
+    # --------------------------------------------------------
+    # Launch
+    # --------------------------------------------------------
+
+    try:
+
+        process = subprocess.Popen(
+            command,
+            shell=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL
+        )
+
+        return {
+            "success": True,
+            "application": definition.get(
+                "name",
+                application_key
+            ),
+            "application_id": application_key,
+            "pid": process.pid,
+            "status": "launched"
+        }
+
+    except FileNotFoundError:
+
+        return {
+            "success": False,
+            "application": definition.get(
+                "name",
+                application_key
+            ),
+            "error": (
+                "The application executable "
+                "could not be found."
+            )
+        }
+
+    except PermissionError:
+
+        return {
+            "success": False,
+            "application": definition.get(
+                "name",
+                application_key
+            ),
+            "error": (
+                "Windows denied permission to "
+                "launch the application."
+            )
+        }
+
+    except OSError as error:
+
+        return {
+            "success": False,
+            "application": definition.get(
+                "name",
+                application_key
+            ),
+            "error": str(error)
+        }
+
+    except Exception as error:
+
+        return {
+            "success": False,
+            "application": definition.get(
+                "name",
+                application_key
+            ),
+            "error": str(error)
+        }

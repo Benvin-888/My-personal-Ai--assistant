@@ -7,32 +7,29 @@ Execution pipeline:
        ↓
     Validator
        ↓
-    Audit
-       ↓
     Permission Engine
-       ↓
-    Audit
        ↓
     Executor
        ↓
     Tool
-       ↓
-    Audit
-       ↓
-    Result
 
 The LLM never directly executes Python functions.
 
-The executor is responsible for connecting:
+The executor is the controlled bridge between
+BENVIN's approved structured actions and the actual
+Python tool implementations.
 
-    validator
-        +
-    permission engine
-        +
-    registered tool functions
-        +
-    audit system
+IMPORTANT:
+
+    The executor does NOT decide what the AI should do.
+
+    It only executes an action after:
+
+        1. Validation
+        2. Executor availability check
+        3. Permission authorization
 """
+
 
 from tools.validator import (
     validate_action
@@ -42,13 +39,6 @@ from tools.permissions import (
     authorize_action
 )
 
-from tools.audit import (
-    record_action_attempt,
-    record_validation,
-    record_authorization,
-    record_execution
-)
-
 from tools.system import (
     get_system_info
 )
@@ -56,7 +46,8 @@ from tools.system import (
 from tools.files import (
     list_directory,
     find_file,
-    path_exists
+    path_exists,
+    get_file_info
 )
 
 from tools.applications import (
@@ -71,7 +62,15 @@ from tools.applications import (
 
 TOOL_FUNCTIONS = {
 
+    # --------------------------------------------------------
+    # SYSTEM
+    # --------------------------------------------------------
+
     "system_info": get_system_info,
+
+    # --------------------------------------------------------
+    # FILESYSTEM
+    # --------------------------------------------------------
 
     "list_directory": list_directory,
 
@@ -79,10 +78,15 @@ TOOL_FUNCTIONS = {
 
     "path_exists": path_exists,
 
+    "get_file_info": get_file_info,
+
+    # --------------------------------------------------------
+    # APPLICATIONS
+    # --------------------------------------------------------
+
     "open_application": open_application,
 
     "list_applications": list_applications
-
 }
 
 
@@ -92,7 +96,8 @@ TOOL_FUNCTIONS = {
 
 def executor_exists(action):
     """
-    Check whether an action has an executor.
+    Check whether an action has a corresponding
+    Python executor function.
 
     Returns:
         bool
@@ -102,102 +107,21 @@ def executor_exists(action):
 
 
 # ============================================================
-# SAFE AUDIT HELPERS
+# GET EXECUTOR
 # ============================================================
 
-def _audit_action_attempt(
-    action,
-    parameters
-):
+def get_executor(action):
     """
-    Record an action attempt.
+    Return the Python function associated with
+    a registered action.
 
-    Audit errors must never interrupt the execution
-    pipeline.
+    Returns:
+        callable | None
     """
 
-    try:
-
-        return record_action_attempt(
-            action,
-            parameters
-        )
-
-    except Exception:
-
-        return None
-
-
-def _audit_validation(
-    action,
-    parameters,
-    validation
-):
-    """
-    Record a validation result.
-
-    Audit errors are intentionally ignored.
-    """
-
-    try:
-
-        return record_validation(
-            action,
-            parameters,
-            validation
-        )
-
-    except Exception:
-
-        return None
-
-
-def _audit_authorization(
-    action,
-    parameters,
-    authorization
-):
-    """
-    Record an authorization decision.
-
-    Audit errors are intentionally ignored.
-    """
-
-    try:
-
-        return record_authorization(
-            action,
-            parameters,
-            authorization
-        )
-
-    except Exception:
-
-        return None
-
-
-def _audit_execution(
-    action,
-    parameters,
-    result
-):
-    """
-    Record an execution result.
-
-    Audit errors are intentionally ignored.
-    """
-
-    try:
-
-        return record_execution(
-            action,
-            parameters,
-            result
-        )
-
-    except Exception:
-
-        return None
+    return TOOL_FUNCTIONS.get(
+        action
+    )
 
 
 # ============================================================
@@ -214,36 +138,25 @@ def execute_action(
 
     Pipeline:
 
-        1. Record action attempt
-        2. Validate action
-        3. Record validation
-        4. Check executor
-        5. Check permission
-        6. Record authorization
-        7. Execute tool
-        8. Record execution
-        9. Return structured result
+        1. Validate action
+        2. Validate parameters
+        3. Check executor
+        4. Check permission
+        5. Execute tool
+        6. Return structured result
 
-    IMPORTANT:
-
-        This function does NOT trust the LLM.
-
-        Every action passes through validation
-        and authorization before execution.
+    The returned structure is intentionally consistent
+    so main.py, context.py, audit logging, and brain.py
+    can safely consume it.
     """
+
+    # ========================================================
+    # NORMALIZE PARAMETERS
+    # ========================================================
 
     if parameters is None:
 
         parameters = {}
-
-    # ========================================================
-    # STEP 0 — AUDIT ACTION ATTEMPT
-    # ========================================================
-
-    _audit_action_attempt(
-        action,
-        parameters
-    )
 
     # ========================================================
     # STEP 1 — VALIDATION
@@ -254,36 +167,20 @@ def execute_action(
         parameters
     )
 
-    # --------------------------------------------------------
-    # Record validation result
-    # --------------------------------------------------------
+    if not validation.get(
+        "valid",
+        False
+    ):
 
-    _audit_validation(
-        action,
-        parameters,
-        validation
-    )
-
-    # --------------------------------------------------------
-    # Validation failure
-    # --------------------------------------------------------
-
-    if not validation["valid"]:
-
-        result = {
+        return {
             "success": False,
             "action": action,
             "status": "validation_failed",
-            "error": validation["error"]
+            "error": validation.get(
+                "error",
+                "Action validation failed."
+            )
         }
-
-        _audit_execution(
-            action,
-            parameters,
-            result
-        )
-
-        return result
 
     # ========================================================
     # STEP 2 — EXECUTOR CHECK
@@ -293,7 +190,7 @@ def execute_action(
         action
     ):
 
-        result = {
+        return {
             "success": False,
             "action": action,
             "status": "no_executor",
@@ -302,14 +199,6 @@ def execute_action(
                 f"'{action}'."
             )
         }
-
-        _audit_execution(
-            action,
-            parameters,
-            result
-        )
-
-        return result
 
     # ========================================================
     # STEP 3 — PERMISSION
@@ -320,64 +209,43 @@ def execute_action(
         user_confirmed=user_confirmed
     )
 
-    # --------------------------------------------------------
-    # Record authorization decision
-    # --------------------------------------------------------
+    if not authorization.get(
+        "allowed",
+        False
+    ):
 
-    _audit_authorization(
-        action,
-        parameters,
-        authorization
-    )
-
-    # --------------------------------------------------------
-    # Authorization failure
-    # --------------------------------------------------------
-
-    if not authorization["allowed"]:
-
-        result = {
+        return {
             "success": False,
             "action": action,
-            "status": authorization["status"],
-            "error": authorization["reason"]
+            "status": authorization.get(
+                "status",
+                "denied"
+            ),
+            "error": authorization.get(
+                "reason",
+                "Action was not authorized."
+            )
         }
-
-        _audit_execution(
-            action,
-            parameters,
-            result
-        )
-
-        return result
 
     # ========================================================
     # STEP 4 — GET TOOL FUNCTION
     # ========================================================
 
-    tool_function = TOOL_FUNCTIONS.get(
+    tool_function = get_executor(
         action
     )
 
     if tool_function is None:
 
-        result = {
+        return {
             "success": False,
             "action": action,
             "status": "no_executor",
             "error": (
-                f"No executor exists for "
-                f"'{action}'."
+                f"No executable function exists "
+                f"for '{action}'."
             )
         }
-
-        _audit_execution(
-            action,
-            parameters,
-            result
-        )
-
-        return result
 
     # ========================================================
     # STEP 5 — EXECUTE TOOL
@@ -385,36 +253,13 @@ def execute_action(
 
     try:
 
-        tool_result = tool_function(
+        result = tool_function(
             **parameters
         )
 
-        result = {
-            "success": True,
-            "action": action,
-            "status": "executed",
-            "result": tool_result
-        }
-
-        # ----------------------------------------------------
-        # Record successful execution
-        # ----------------------------------------------------
-
-        _audit_execution(
-            action,
-            parameters,
-            result
-        )
-
-        return result
-
-    # ========================================================
-    # PARAMETER ERROR
-    # ========================================================
-
     except TypeError as error:
 
-        result = {
+        return {
             "success": False,
             "action": action,
             "status": (
@@ -423,31 +268,139 @@ def execute_action(
             "error": str(error)
         }
 
-        _audit_execution(
-            action,
-            parameters,
-            result
-        )
-
-        return result
-
-    # ========================================================
-    # GENERAL EXECUTION ERROR
-    # ========================================================
-
     except Exception as error:
 
-        result = {
+        return {
             "success": False,
             "action": action,
             "status": "execution_error",
             "error": str(error)
         }
 
-        _audit_execution(
-            action,
-            parameters,
-            result
+    # ========================================================
+    # STEP 6 — HANDLE TOOL RESULT
+    # ========================================================
+
+    # BENVIN tools normally return dictionaries.
+    #
+    # We deliberately handle unexpected return types so
+    # the executor itself never crashes because a future
+    # tool returned something unusual.
+
+    if isinstance(
+        result,
+        dict
+    ):
+
+        # ----------------------------------------------------
+        # If the tool explicitly reports success=False,
+        # preserve that failure instead of claiming execution
+        # succeeded.
+        # ----------------------------------------------------
+
+        if result.get(
+            "success"
+        ) is False:
+
+            return {
+                "success": False,
+                "action": action,
+                "status": (
+                    "tool_execution_failed"
+                ),
+                "error": result.get(
+                    "error",
+                    "The tool reported an execution failure."
+                ),
+                "result": result
+            }
+
+    # ========================================================
+    # SUCCESS
+    # ========================================================
+
+    return {
+        "success": True,
+        "action": action,
+        "status": "executed",
+        "result": result
+    }
+
+
+# ============================================================
+# LIST EXECUTABLE ACTIONS
+# ============================================================
+
+def list_executable_actions():
+    """
+    Return the actions that currently have Python
+    executor functions.
+
+    This is useful for diagnostics and testing.
+    """
+
+    return list(
+        TOOL_FUNCTIONS.keys()
+    )
+
+
+# ============================================================
+# EXECUTOR STATUS
+# ============================================================
+
+def get_executor_status():
+    """
+    Return a structured diagnostic report showing
+    which actions have executor functions.
+
+    This does not execute anything.
+    """
+
+    status = []
+
+    for action, function in TOOL_FUNCTIONS.items():
+
+        status.append({
+            "action": action,
+            "executor": function.__name__,
+            "available": callable(
+                function
+            )
+        })
+
+    return {
+        "success": True,
+        "count": len(status),
+        "executors": status
+    }
+
+
+# ============================================================
+# MODULE TEST
+# ============================================================
+
+if __name__ == "__main__":
+
+    print()
+    print("=" * 60)
+    print("BENVIN EXECUTOR TEST")
+    print("=" * 60)
+
+    print()
+    print("Executable actions:")
+
+    for action in list_executable_actions():
+
+        print(
+            f"  - {action}"
         )
 
-        return result
+    print()
+    print("Executor status:")
+
+    print(
+        get_executor_status()
+    )
+
+    print()
+    print("Executor test complete.")

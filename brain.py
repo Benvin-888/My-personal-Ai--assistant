@@ -8,8 +8,9 @@ Responsibilities:
     4. Build tool context from the central registry.
     5. Analyze natural-language requests.
     6. Produce structured conversation or action intents.
-    7. Safely parse model output.
-    8. Convert completed tool results into natural language.
+    7. Safely parse and normalize model output.
+    8. Resolve simple contextual references.
+    9. Convert completed tool results into natural language.
 
 IMPORTANT:
 
@@ -19,6 +20,7 @@ IMPORTANT:
         - understand a request
         - select a registered action
         - build action parameters
+        - use conversation context to resolve references
 
     The brain may NOT:
         - access the filesystem
@@ -29,6 +31,7 @@ IMPORTANT:
 
     The validator, permission engine, and executor remain
     the security boundary.
+
 
 ARCHITECTURE:
 
@@ -53,6 +56,27 @@ ARCHITECTURE:
     brain.py
       ↓
     natural-language response
+
+
+IMPORTANT DESIGN RULE:
+
+    Deterministic routing is used for requests where accuracy
+    matters more than language creativity.
+
+    Example:
+
+        "what is my computer information?"
+
+    MUST become:
+
+        {
+            "type": "action",
+            "action": "system_info",
+            "parameters": {}
+        }
+
+    It must never be left to a small local LLM to invent
+    system information.
 
 
 LONG-TERM MEMORY:
@@ -109,19 +133,9 @@ def _ask_ollama(
     """
     Send a prompt to the local Ollama server.
 
-    Args:
-        prompt:
-            Prompt sent to Qwen3.
+    The brain only communicates with Ollama.
 
-        json_mode:
-            Ask Ollama for JSON-formatted output.
-
-        think:
-            Enable or disable Qwen3 thinking.
-
-    Returns:
-        str:
-            Model response.
+    It never executes computer actions.
     """
 
     if not isinstance(
@@ -190,6 +204,8 @@ def build_tool_context():
     Build the tool description supplied to Qwen3.
 
     The registry remains the single source of truth.
+
+    Only enabled tools are presented to the model.
     """
 
     tools = []
@@ -201,6 +217,12 @@ def build_tool_context():
         )
 
         if definition is None:
+            continue
+
+        if not definition.get(
+            "enabled",
+            False
+        ):
             continue
 
         tools.append({
@@ -298,11 +320,9 @@ def build_memory_context(user_input):
 # SHORT-TERM CONTEXT
 # ============================================================
 
-def build_context_context():
+def _get_context_snapshot():
     """
-    Build short-term session context.
-
-    Only recent conversation is supplied to the model.
+    Safely retrieve the current short-term context.
     """
 
     try:
@@ -311,14 +331,28 @@ def build_context_context():
 
     except Exception:
 
-        return (
-            "No short-term context available."
-        )
+        return None
 
     if not isinstance(
         snapshot,
         dict
     ):
+
+        return None
+
+    return snapshot
+
+
+def build_context_context():
+    """
+    Build short-term session context.
+
+    Only recent conversation is supplied to the model.
+    """
+
+    snapshot = _get_context_snapshot()
+
+    if snapshot is None:
 
         return (
             "No short-term context available."
@@ -376,7 +410,150 @@ def build_context_context():
 
 
 # ============================================================
-# DETERMINISTIC ACTION ROUTER
+# CONTEXT REFERENCE HELPERS
+# ============================================================
+
+def _get_last_successful_action_context():
+    """
+    Retrieve useful information from the most recent
+    short-term context.
+
+    This function does NOT execute anything.
+
+    It only reads context.py's stored state.
+    """
+
+    snapshot = _get_context_snapshot()
+
+    if snapshot is None:
+        return None
+
+    last_action = snapshot.get(
+        "last_action"
+    )
+
+    last_result = snapshot.get(
+        "last_tool_result"
+    )
+
+    variables = snapshot.get(
+        "variables",
+        {}
+    )
+
+    if not isinstance(
+        variables,
+        dict
+    ):
+        variables = {}
+
+    return {
+        "last_action": last_action,
+        "last_tool_result": last_result,
+        "variables": variables
+    }
+
+
+def _resolve_contextual_path():
+    """
+    Try to recover a previous filesystem path from
+    short-term context.
+
+    This does NOT access the filesystem.
+    """
+
+    context = _get_last_successful_action_context()
+
+    if context is None:
+        return None
+
+    last_action = context.get(
+        "last_action"
+    )
+
+    last_result = context.get(
+        "last_tool_result"
+    )
+
+    variables = context.get(
+        "variables",
+        {}
+    )
+
+    possible_values = [
+        variables.get("current_path"),
+        variables.get("last_path"),
+        variables.get("search_root"),
+        variables.get("current_directory"),
+    ]
+
+    for value in possible_values:
+
+        if isinstance(
+            value,
+            str
+        ) and value.strip():
+
+            return value.strip()
+
+    if isinstance(
+        last_action,
+        dict
+    ):
+
+        parameters = last_action.get(
+            "parameters",
+            {}
+        )
+
+        if isinstance(
+            parameters,
+            dict
+        ):
+
+            for key in (
+                "path",
+                "search_root"
+            ):
+
+                value = parameters.get(
+                    key
+                )
+
+                if isinstance(
+                    value,
+                    str
+                ) and value.strip():
+
+                    return value.strip()
+
+    if isinstance(
+        last_result,
+        dict
+    ):
+
+        for key in (
+            "path",
+            "directory",
+            "search_root"
+        ):
+
+            value = last_result.get(
+                key
+            )
+
+            if isinstance(
+                value,
+                str
+            ) and value.strip():
+
+                return value.strip()
+
+    return None
+
+
+# ============================================================
+# TEXT NORMALIZATION
 # ============================================================
 
 def _normalize_text(text):
@@ -401,18 +578,94 @@ def _normalize_text(text):
     return text
 
 
+# ============================================================
+# SYSTEM INFORMATION REQUEST DETECTION
+# ============================================================
+
+def _is_system_info_request(text):
+    """
+    Detect requests that require actual computer information.
+
+    These requests MUST NOT be delegated to Qwen3 because
+    Qwen3 does not have direct access to the computer.
+
+    Returns:
+        bool
+    """
+
+    if not isinstance(
+        text,
+        str
+    ):
+        return False
+
+    normalized = _normalize_text(
+        text
+    )
+
+    if not normalized:
+        return False
+
+    exact_patterns = [
+        r"\bwhat is my computer information\b",
+        r"\bwhat is my computer info\b",
+        r"\bwhat's my computer information\b",
+        r"\bwhat's my computer info\b",
+
+        r"\bwhat is my pc information\b",
+        r"\bwhat is my pc info\b",
+        r"\bwhat's my pc information\b",
+        r"\bwhat's my pc info\b",
+
+        r"\bwhat is my laptop information\b",
+        r"\bwhat is my laptop info\b",
+        r"\bwhat's my laptop information\b",
+        r"\bwhat's my laptop info\b",
+
+        r"\bshow my computer information\b",
+        r"\bshow my computer info\b",
+        r"\bshow my pc information\b",
+        r"\bshow my pc info\b",
+
+        r"\bshow my laptop information\b",
+        r"\bshow my laptop info\b",
+
+        r"\bget my computer information\b",
+        r"\bget my computer info\b",
+        r"\bget my pc information\b",
+        r"\bget my pc info\b",
+
+        r"\bget my laptop information\b",
+        r"\bget my laptop info\b",
+
+        r"\bcomputer specifications\b",
+        r"\bcomputer specs\b",
+        r"\bpc specifications\b",
+        r"\bpc specs\b",
+        r"\blaptop specifications\b",
+        r"\blaptop specs\b",
+
+        r"\bsystem information\b",
+        r"\bsystem info\b",
+    ]
+
+    return any(
+        re.search(
+            pattern,
+            normalized,
+            re.IGNORECASE
+        )
+        for pattern in exact_patterns
+    )
+
+
+# ============================================================
+# FILENAME EXTRACTION
+# ============================================================
+
 def _extract_filename(text):
     """
     Extract a likely filename from a filesystem request.
-
-    Examples:
-
-        Find main.py
-        Search for test.txt
-        Find config.json
-
-    Returns:
-        filename or None
     """
 
     if not isinstance(
@@ -421,16 +674,12 @@ def _extract_filename(text):
     ):
         return None
 
-    # --------------------------------------------------------
-    # Common filename patterns
-    # --------------------------------------------------------
-
     pattern = re.compile(
         r"""
         (?:
             file\s+
         )?
-        ["'`]?   
+        ["'`]?
         (
             [A-Za-z0-9_\-\.]+
             \.[A-Za-z0-9_\-]+
@@ -456,6 +705,10 @@ def _extract_filename(text):
 
     return filename
 
+
+# ============================================================
+# REQUEST DETECTION
+# ============================================================
 
 def _is_find_file_request(text):
     """
@@ -555,22 +808,130 @@ def _is_file_info_request(text):
     )
 
 
+# ============================================================
+# APPLICATION REQUEST DETECTION
+# ============================================================
+
+def _is_open_application_request(text):
+    """
+    Detect obvious requests to launch an application.
+    """
+
+    patterns = [
+        r"\bopen\b",
+        r"\blaunch\b",
+        r"\bstart\b",
+        r"\brun\b",
+    ]
+
+    return any(
+        re.search(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
+        for pattern in patterns
+    )
+
+
+def _is_list_applications_request(text):
+    """
+    Detect requests asking which applications BENVIN
+    is allowed to open.
+    """
+
+    patterns = [
+        r"\bwhat applications\b",
+        r"\bwhich applications\b",
+        r"\bwhat apps\b",
+        r"\bwhich apps\b",
+        r"\bwhat programs\b",
+        r"\bwhich programs\b",
+        r"\bwhat can you open\b",
+        r"\bwhat can benvin open\b",
+        r"\bwhat applications can you open\b",
+        r"\bwhich applications can you open\b",
+    ]
+
+    return any(
+        re.search(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
+        for pattern in patterns
+    )
+
+
+def _extract_application_name(text):
+    """
+    Extract a likely application name from a launch request.
+    """
+
+    if not isinstance(
+        text,
+        str
+    ):
+        return None
+
+    patterns = [
+        r"\bopen\s+(?:the\s+)?(.+?)\s*$",
+        r"\blaunch\s+(?:the\s+)?(.+?)\s*$",
+        r"\bstart\s+(?:the\s+)?(.+?)\s*$",
+        r"\brun\s+(?:the\s+)?(.+?)\s*$",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
+
+        if not match:
+            continue
+
+        application = match.group(
+            1
+        ).strip()
+
+        if not application:
+            continue
+
+        application = re.sub(
+            r"[.!?]+$",
+            "",
+            application
+        ).strip()
+
+        if not application:
+            continue
+
+        application = re.sub(
+            r"\s+(?:please|for me)$",
+            "",
+            application,
+            flags=re.IGNORECASE
+        ).strip()
+
+        if not application:
+            continue
+
+        return application
+
+    return None
+
+
+# ============================================================
+# LOCATION EXTRACTION
+# ============================================================
+
 def _extract_location_hint(text):
     """
     Extract a simple human-readable location hint.
 
     This does NOT access the filesystem.
-
-    It only identifies words supplied by the user so that
-    the controlled filesystem layer can resolve them.
-
-    Examples:
-
-        "in my Benvin folder"
-            -> Benvin
-
-        "on my Desktop"
-            -> Desktop
     """
 
     if not isinstance(
@@ -608,7 +969,6 @@ def _extract_location_hint(text):
         if not location:
             continue
 
-        # Remove common trailing words.
         location = re.sub(
             r"\s+(?:files?|folders?)$",
             "",
@@ -621,6 +981,40 @@ def _extract_location_hint(text):
 
     return None
 
+
+def _contains_context_reference(text):
+    """
+    Detect common contextual references.
+    """
+
+    if not isinstance(
+        text,
+        str
+    ):
+        return False
+
+    patterns = [
+        r"\bthere\b",
+        r"\bhere\b",
+        r"\bit\b",
+        r"\bthat\b",
+        r"\bthe same\b",
+        r"\bagain\b",
+    ]
+
+    return any(
+        re.search(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
+        for pattern in patterns
+    )
+
+
+# ============================================================
+# DETERMINISTIC ACTION ROUTER
+# ============================================================
 
 def _build_deterministic_action_intent(
     user_input
@@ -635,14 +1029,6 @@ def _build_deterministic_action_intent(
 
     The validator, permission system, and executor still
     control whether the action actually happens.
-
-    Returns:
-
-        dict
-            Structured action intent.
-
-        None
-            No deterministic route detected.
     """
 
     text = _normalize_text(
@@ -651,6 +1037,78 @@ def _build_deterministic_action_intent(
 
     if not text:
         return None
+
+    # ========================================================
+    # SYSTEM INFORMATION
+    # ========================================================
+
+    if _is_system_info_request(
+        text
+    ):
+
+        intent = {
+            "type": "action",
+            "action": "system_info",
+            "parameters": {}
+        }
+
+        if _validate_registered_action(
+            intent
+        ):
+
+            return intent
+
+        return None
+
+    # ========================================================
+    # LIST APPLICATIONS
+    # ========================================================
+
+    if _is_list_applications_request(
+        text
+    ):
+
+        intent = {
+            "type": "action",
+            "action": "list_applications",
+            "parameters": {}
+        }
+
+        if _validate_registered_action(
+            intent
+        ):
+
+            return intent
+
+        return None
+
+    # ========================================================
+    # OPEN APPLICATION
+    # ========================================================
+
+    if _is_open_application_request(
+        text
+    ):
+
+        application = _extract_application_name(
+            text
+        )
+
+        if application:
+
+            intent = {
+                "type": "action",
+                "action": "open_application",
+                "parameters": {
+                    "application": application
+                }
+            }
+
+            if _validate_registered_action(
+                intent
+            ):
+
+                return intent
 
     # ========================================================
     # FIND FILE
@@ -674,16 +1132,36 @@ def _build_deterministic_action_intent(
         }
 
         if location:
+
             parameters[
                 "search_root"
             ] = location
 
-        return {
+        elif _contains_context_reference(
+            text
+        ):
+
+            previous_path = (
+                _resolve_contextual_path()
+            )
+
+            if previous_path:
+
+                parameters[
+                    "search_root"
+                ] = previous_path
+
+        intent = {
             "type": "action",
             "action": "find_file",
-            "parameters": parameters,
-            "routing": "deterministic"
+            "parameters": parameters
         }
+
+        if _validate_registered_action(
+            intent
+        ):
+
+            return intent
 
     # ========================================================
     # LIST DIRECTORY
@@ -697,13 +1175,6 @@ def _build_deterministic_action_intent(
             text
         )
 
-        # ----------------------------------------------------
-        # Common Windows location aliases.
-        #
-        # These remain symbolic. The filesystem tool is
-        # responsible for resolving/allowing the actual path.
-        # ----------------------------------------------------
-
         if location:
 
             path = location
@@ -712,18 +1183,39 @@ def _build_deterministic_action_intent(
 
             path = "Desktop"
 
+        elif _contains_context_reference(
+            text
+        ):
+
+            previous_path = (
+                _resolve_contextual_path()
+            )
+
+            if previous_path:
+
+                path = previous_path
+
+            else:
+
+                path = "."
+
         else:
 
             path = "."
 
-        return {
+        intent = {
             "type": "action",
             "action": "list_directory",
             "parameters": {
                 "path": path
-            },
-            "routing": "deterministic"
+            }
         }
+
+        if _validate_registered_action(
+            intent
+        ):
+
+            return intent
 
     # ========================================================
     # PATH EXISTS
@@ -755,18 +1247,39 @@ def _build_deterministic_action_intent(
 
             path = location
 
+        elif _contains_context_reference(
+            text
+        ):
+
+            previous_path = (
+                _resolve_contextual_path()
+            )
+
+            if previous_path:
+
+                path = previous_path
+
+            else:
+
+                return None
+
         else:
 
             return None
 
-        return {
+        intent = {
             "type": "action",
             "action": "path_exists",
             "parameters": {
                 "path": path
-            },
-            "routing": "deterministic"
+            }
         }
+
+        if _validate_registered_action(
+            intent
+        ):
+
+            return intent
 
     # ========================================================
     # FILE INFORMATION
@@ -798,18 +1311,39 @@ def _build_deterministic_action_intent(
 
             path = location
 
+        elif _contains_context_reference(
+            text
+        ):
+
+            previous_path = (
+                _resolve_contextual_path()
+            )
+
+            if previous_path:
+
+                path = previous_path
+
+            else:
+
+                return None
+
         else:
 
             return None
 
-        return {
+        intent = {
             "type": "action",
             "action": "get_file_info",
             "parameters": {
                 "path": path
-            },
-            "routing": "deterministic"
+            }
         }
+
+        if _validate_registered_action(
+            intent
+        ):
+
+            return intent
 
     return None
 
@@ -853,10 +1387,20 @@ You do NOT execute computer actions.
 You do NOT have direct access to the computer.
 
 ============================================================
-RESPONSE TYPE 1 — CONVERSATION
+VALID INTENT TYPES
 ============================================================
 
-Use this when the user wants:
+There are exactly TWO normal intent types.
+
+1. conversation
+
+2. action
+
+============================================================
+CONVERSATION
+============================================================
+
+Use "conversation" when the user wants:
 
 - an explanation
 - an answer to a question
@@ -866,53 +1410,27 @@ Use this when the user wants:
 - advice
 - information that does not require a registered tool
 
-Example:
-
-User:
-What is Python?
-
-Return:
+Format:
 
 {{
     "type": "conversation",
-    "response": "Python is a high-level programming language..."
+    "response": "Your concise answer."
 }}
 
 ============================================================
-RESPONSE TYPE 2 — ACTION
+ACTION
 ============================================================
 
-Use this when the user explicitly asks BENVIN
-to perform a registered computer action.
+Use "action" when the user asks BENVIN to perform
+a computer operation using one of the registered tools.
 
-Example:
-
-User:
-Find main.py in my Benvin folder.
-
-Return:
+Format:
 
 {{
     "type": "action",
-    "action": "find_file",
+    "action": "registered_action_name",
     "parameters": {{
-        "filename": "main.py",
-        "search_root": "Benvin"
-    }}
-}}
-
-Example:
-
-User:
-List desktop files.
-
-Return:
-
-{{
-    "type": "action",
-    "action": "list_directory",
-    "parameters": {{
-        "path": "Desktop"
+        "parameter_name": "value"
     }}
 }}
 
@@ -920,74 +1438,135 @@ Return:
 AVAILABLE TOOLS
 ============================================================
 
+Only these tools may be selected:
+
 {tools}
 
 ============================================================
-IMPORTANT ACTION MAPPINGS
+IMPORTANT
 ============================================================
 
-Use these mappings when the user's request matches them.
+The AVAILABLE TOOLS section is the authoritative list.
+
+Never invent an action.
+
+Never invent a parameter.
+
+Never invent a filesystem result.
+
+Never invent computer information.
+
+Never claim an action already happened.
+
+The executor will perform the actual action later.
+
+============================================================
+SYSTEM INFORMATION
+============================================================
+
+If the user asks for actual information about their
+computer, PC, laptop, operating system, processor,
+memory, Python version, computer name, username,
+disk, or system:
+
+    use:
+
+    {{
+        "type": "action",
+        "action": "system_info",
+        "parameters": {{}}
+    }}
+
+Do NOT answer with guessed system information.
+
+============================================================
+COMMON ACTION MAPPINGS
+============================================================
 
 "find a file"
-        -> find_file
+    -> find_file
 
 "search for a file"
-        -> find_file
+    -> find_file
 
 "locate a file"
-        -> find_file
+    -> find_file
 
 "find main.py"
-        -> find_file
-
-"find test.txt"
-        -> find_file
+    -> find_file
 
 "list files"
-        -> list_directory
+    -> list_directory
 
 "list desktop files"
-        -> list_directory
+    -> list_directory
 
 "show desktop files"
-        -> list_directory
+    -> list_directory
 
 "show files in a folder"
-        -> list_directory
+    -> list_directory
 
 "does main.py exist"
-        -> path_exists
+    -> path_exists
 
 "check whether main.py exists"
-        -> path_exists
+    -> path_exists
 
 "get information about main.py"
-        -> get_file_info
+    -> get_file_info
+
+"open Notepad"
+    -> open_application
+
+"launch Calculator"
+    -> open_application
+
+"what applications can you open"
+    -> list_applications
+
+"what apps can you open"
+    -> list_applications
+
+"what is my computer information"
+    -> system_info
+
+"show my computer specifications"
+    -> system_info
 
 "what is Python"
-        -> conversation
+    -> conversation
 
 ============================================================
-CRITICAL EXECUTION RULE
+CONTEXT
 ============================================================
 
-The assistant's previous conversational responses are
-NOT evidence that a computer action happened.
+Short-term context may contain previous conversation,
+previous actions, and actual execution results.
 
-For example, if previous context contains:
+Use it to understand references such as:
 
-"The file was not found."
+- it
+- that
+- the file
+- the application
+- there
+- here
+- again
+- continue
 
-that does NOT mean a real filesystem search happened.
+However:
 
-Only an actual execution result supplied by BENVIN's
-execution system is evidence that an action happened.
+Previous assistant text is NOT evidence that an action
+actually happened.
 
-If the current user asks to find the file again,
-you MUST create a new action intent.
+Only an actual execution result supplied by the execution
+system is evidence that an action happened.
+
+Do not invent missing context.
 
 ============================================================
-RELEVANT LONG-TERM USER MEMORY
+LONG-TERM MEMORY
 ============================================================
 
 {memory_context}
@@ -999,37 +1578,7 @@ CURRENT SHORT-TERM CONTEXT
 {short_term_context}
 
 ============================================================
-CONTEXT RULES
-============================================================
-
-Use short-term context for references such as:
-
-- "it"
-- "that"
-- "the file"
-- "the application"
-- "again"
-- "continue"
-- "close it"
-- "open it"
-- "what happened"
-
-Do NOT treat previous assistant statements as tool results.
-
-Do NOT invent filesystem results.
-
-Do NOT claim that a file exists.
-
-Do NOT claim that a file does not exist.
-
-Do NOT claim that an application was opened.
-
-Do NOT claim that an action was performed.
-
-Only the execution system can establish those facts.
-
-============================================================
-STRICT RULES
+STRICT OUTPUT RULES
 ============================================================
 
 1. Return ONLY ONE valid JSON object.
@@ -1038,50 +1587,45 @@ STRICT RULES
 
 3. Do NOT use code fences.
 
-4. Never invent a tool.
+4. The root object must contain "type".
 
-5. Only use actions listed in AVAILABLE TOOLS.
+5. "type" must be exactly "conversation" or "action".
 
-6. Never invent parameters.
+6. Conversation intents must contain:
+       "response": string
 
-7. Only use parameters defined by the selected tool.
+7. Action intents must contain:
+       "action": string
+       "parameters": object
 
-8. Normal questions use "conversation".
+8. Only use registered actions.
 
-9. Computer requests use "action".
+9. Only use parameters defined by the selected tool.
 
-10. Never execute tools.
+10. Do not add unnecessary fields.
 
-11. Never invent tool results.
+11. Never execute tools.
 
-12. Never claim an action already happened.
+12. Never claim a computer action happened.
 
-13. Use relevant long-term memory when appropriate.
+13. Never invent a filesystem result.
 
-14. Use short-term context when appropriate.
+14. Never invent system information.
 
-15. Keep conversational answers concise.
+15. If the user asks a normal knowledge question,
+    use "conversation".
 
-16. If the user clearly requests a computer action,
-    prefer the registered action.
+16. If the user clearly asks for a registered computer
+    operation, use "action".
 
-17. If a request is ambiguous and does not clearly
-    require an action, use conversation.
+17. If the request is ambiguous and does not clearly
+    require a computer action, use "conversation".
 
-18. For filesystem requests, do NOT answer with a
-    claimed filesystem result.
+18. For filesystem actions, provide the user's symbolic
+    path/name when possible. Do not invent absolute paths.
 
-19. The filesystem tool must determine whether files
-    actually exist.
-
-20. The executor must determine whether an action
-    actually happens.
-
-21. For actions, "parameters" must be a JSON object.
-
-22. For conversations, "response" must be a string.
-
-23. Do not include unnecessary fields.
+19. The executor is responsible for determining whether
+    the requested action actually succeeds.
 
 ============================================================
 USER REQUEST
@@ -1111,10 +1655,6 @@ def _extract_json(text):
     if not text:
         return None
 
-    # --------------------------------------------------------
-    # Direct JSON
-    # --------------------------------------------------------
-
     try:
 
         parsed = json.loads(
@@ -1128,11 +1668,8 @@ def _extract_json(text):
             return parsed
 
     except json.JSONDecodeError:
-        pass
 
-    # --------------------------------------------------------
-    # Remove Markdown fences
-    # --------------------------------------------------------
+        pass
 
     cleaned = re.sub(
         r"```(?:json)?",
@@ -1159,44 +1696,168 @@ def _extract_json(text):
             return parsed
 
     except json.JSONDecodeError:
+
         pass
 
-    # --------------------------------------------------------
-    # Extract JSON object
-    # --------------------------------------------------------
+    start_positions = [
+        match.start()
+        for match in re.finditer(
+            r"\{",
+            cleaned
+        )
+    ]
 
-    start = cleaned.find(
-        "{"
-    )
+    for start in start_positions:
 
-    end = cleaned.rfind(
-        "}"
-    )
+        depth = 0
+        in_string = False
+        escaped = False
 
-    if (
-        start != -1
-        and end != -1
-        and end > start
+        for index in range(
+            start,
+            len(cleaned)
+        ):
+
+            character = cleaned[
+                index
+            ]
+
+            if escaped:
+
+                escaped = False
+                continue
+
+            if character == "\\" and in_string:
+
+                escaped = True
+                continue
+
+            if character == '"':
+
+                in_string = not in_string
+                continue
+
+            if in_string:
+                continue
+
+            if character == "{":
+
+                depth += 1
+
+            elif character == "}":
+
+                depth -= 1
+
+                if depth == 0:
+
+                    candidate = cleaned[
+                        start:index + 1
+                    ]
+
+                    try:
+
+                        parsed = json.loads(
+                            candidate
+                        )
+
+                        if isinstance(
+                            parsed,
+                            dict
+                        ):
+
+                            return parsed
+
+                    except json.JSONDecodeError:
+
+                        break
+
+    return None
+
+
+# ============================================================
+# INTENT NORMALIZATION
+# ============================================================
+
+def _normalize_intent(intent):
+    """
+    Normalize a parsed intent into BENVIN's canonical
+    structure.
+    """
+
+    if not isinstance(
+        intent,
+        dict
     ):
+        return None
 
-        candidate = cleaned[
-            start:end + 1
-        ]
+    intent_type = intent.get(
+        "type"
+    )
 
-        try:
+    if not isinstance(
+        intent_type,
+        str
+    ):
+        return None
 
-            parsed = json.loads(
-                candidate
-            )
+    intent_type = (
+        intent_type.strip().lower()
+    )
 
-            if isinstance(
-                parsed,
-                dict
-            ):
-                return parsed
+    if intent_type == "conversation":
 
-        except json.JSONDecodeError:
-            pass
+        response = intent.get(
+            "response"
+        )
+
+        if not isinstance(
+            response,
+            str
+        ):
+            return None
+
+        response = response.strip()
+
+        if not response:
+            return None
+
+        return {
+            "type": "conversation",
+            "response": response
+        }
+
+    if intent_type == "action":
+
+        action = intent.get(
+            "action"
+        )
+
+        parameters = intent.get(
+            "parameters"
+        )
+
+        if not isinstance(
+            action,
+            str
+        ):
+            return None
+
+        action = action.strip()
+
+        if not action:
+            return None
+
+        if not isinstance(
+            parameters,
+            dict
+        ):
+            return None
+
+        return {
+            "type": "action",
+            "action": action,
+            "parameters": parameters
+        }
 
     return None
 
@@ -1223,10 +1884,6 @@ def validate_intent_shape(intent):
         "type"
     )
 
-    # --------------------------------------------------------
-    # Conversation
-    # --------------------------------------------------------
-
     if intent_type == "conversation":
 
         response = intent.get(
@@ -1242,10 +1899,6 @@ def validate_intent_shape(intent):
                 response.strip()
             )
         )
-
-    # --------------------------------------------------------
-    # Action
-    # --------------------------------------------------------
 
     if intent_type == "action":
 
@@ -1284,9 +1937,7 @@ def validate_intent_shape(intent):
 def _validate_registered_action(intent):
     """
     Ensure an action produced by the brain is actually
-    registered.
-
-    This is an additional brain-side safety check.
+    registered and enabled.
 
     tools.validator.py remains the authoritative validator
     before execution.
@@ -1301,6 +1952,7 @@ def _validate_registered_action(intent):
     if intent.get(
         "type"
     ) != "action":
+
         return True
 
     action = intent.get(
@@ -1341,19 +1993,11 @@ def _validate_registered_action(intent):
     ):
         return False
 
-    # --------------------------------------------------------
-    # Reject unknown parameters.
-    # --------------------------------------------------------
-
     for parameter in parameters:
 
         if parameter not in allowed_parameters:
 
             return False
-
-    # --------------------------------------------------------
-    # Check required parameters.
-    # --------------------------------------------------------
 
     for name, definition in allowed_parameters.items():
 
@@ -1398,22 +2042,20 @@ def analyze_intent(user_input):
     """
     Analyze a user request.
 
-    Deterministic routing handles obvious computer actions.
+    Processing order:
 
-    Qwen3 handles general natural-language intent analysis.
+        1. Validate input.
+        2. Try deterministic routing.
+        3. Build the LLM intent prompt.
+        4. Ask Qwen3.
+        5. Parse JSON.
+        6. Normalize intent.
+        7. Validate intent shape.
+        8. Validate action against registry.
+        9. Return canonical intent.
 
-    Returns:
-
-        conversation intent
-
-        action intent
-
-        error intent
+    Deterministic routing is deliberately first.
     """
-
-    # --------------------------------------------------------
-    # Validate input
-    # --------------------------------------------------------
 
     if not isinstance(
         user_input,
@@ -1439,7 +2081,7 @@ def analyze_intent(user_input):
         }
 
     # ========================================================
-    # STEP 1 — DETERMINISTIC ROUTING
+    # DETERMINISTIC ROUTING
     # ========================================================
 
     deterministic_intent = (
@@ -1450,17 +2092,17 @@ def analyze_intent(user_input):
 
     if deterministic_intent is not None:
 
-        # ----------------------------------------------------
-        # Remove internal routing metadata before returning.
-        #
-        # The executor and other layers only need the
-        # standard intent fields.
-        # ----------------------------------------------------
+        if not validate_intent_shape(
+            deterministic_intent
+        ):
 
-        deterministic_intent.pop(
-            "routing",
-            None
-        )
+            return {
+                "type": "error",
+                "error": (
+                    "The deterministic router "
+                    "produced an invalid intent."
+                )
+            }
 
         if not _validate_registered_action(
             deterministic_intent
@@ -1477,7 +2119,7 @@ def analyze_intent(user_input):
         return deterministic_intent
 
     # ========================================================
-    # STEP 2 — BUILD LLM PROMPT
+    # BUILD LLM PROMPT
     # ========================================================
 
     try:
@@ -1496,7 +2138,7 @@ def analyze_intent(user_input):
         }
 
     # ========================================================
-    # STEP 3 — ASK QWEN3
+    # ASK QWEN3
     # ========================================================
 
     try:
@@ -1517,12 +2159,13 @@ def analyze_intent(user_input):
             )
         }
 
-    except requests.ConnectionError as error:
+    except requests.ConnectionError:
 
         return {
             "type": "error",
             "error": (
-                f"Could not connect to Ollama: {error}"
+                "Could not connect to Ollama. "
+                "Make sure Ollama is running."
             )
         }
 
@@ -1543,7 +2186,7 @@ def analyze_intent(user_input):
         }
 
     # ========================================================
-    # STEP 4 — PARSE JSON
+    # PARSE JSON
     # ========================================================
 
     intent = _extract_json(
@@ -1552,36 +2195,39 @@ def analyze_intent(user_input):
 
     if intent is None:
 
-        if raw_response:
-
-            return {
-                "type": "conversation",
-                "response": raw_response,
-                "fallback": True
-            }
-
         return {
             "type": "error",
             "error": (
-                "The AI returned an empty response."
+                "The AI returned invalid structured "
+                "intent data."
             )
         }
 
     # ========================================================
-    # STEP 5 — VALIDATE INTENT SHAPE
+    # NORMALIZE
+    # ========================================================
+
+    intent = _normalize_intent(
+        intent
+    )
+
+    if intent is None:
+
+        return {
+            "type": "error",
+            "error": (
+                "The AI returned an unsupported "
+                "intent structure."
+            )
+        }
+
+    # ========================================================
+    # VALIDATE SHAPE
     # ========================================================
 
     if not validate_intent_shape(
         intent
     ):
-
-        if raw_response:
-
-            return {
-                "type": "conversation",
-                "response": raw_response,
-                "fallback": True
-            }
 
         return {
             "type": "error",
@@ -1591,7 +2237,7 @@ def analyze_intent(user_input):
         }
 
     # ========================================================
-    # STEP 6 — VALIDATE REGISTERED ACTION
+    # VALIDATE REGISTRY
     # ========================================================
 
     if not _validate_registered_action(
@@ -1606,11 +2252,107 @@ def analyze_intent(user_input):
             )
         }
 
-    # ========================================================
-    # STEP 7 — RETURN INTENT
-    # ========================================================
-
     return intent
+
+
+# ============================================================
+# SYSTEM INFORMATION RESPONSE
+# ============================================================
+
+def _format_system_info_response(result):
+    """
+    Format system information deterministically.
+
+    This is intentionally NOT delegated to Qwen3.
+
+    The data comes directly from the trusted system tool.
+    """
+
+    if not isinstance(
+        result,
+        dict
+    ):
+        return None
+
+    if not result.get(
+        "success"
+    ):
+        return None
+
+    data = result.get(
+        "result"
+    )
+
+    if not isinstance(
+        data,
+        dict
+    ):
+        return None
+
+    lines = [
+        "Here is your computer information:"
+    ]
+
+    field_labels = [
+        ("operating_system", "Operating System"),
+        ("os_version", "OS Version"),
+        ("architecture", "Architecture"),
+        ("machine", "Machine"),
+        ("processor", "Processor"),
+        ("memory", "Memory"),
+        ("disk", "Disk"),
+        ("python_version", "Python"),
+        ("computer_name", "Computer Name"),
+        ("username", "User"),
+        ("uptime", "Uptime"),
+        ("benvin_directory", "BENVIN Directory"),
+    ]
+
+    for key, label in field_labels:
+
+        value = data.get(
+            key
+        )
+
+        if value is None:
+            continue
+
+        if isinstance(
+            value,
+            dict
+        ):
+
+            value = ", ".join(
+                f"{sub_key}: {sub_value}"
+                for sub_key, sub_value
+                in value.items()
+                if sub_value is not None
+            )
+
+        if isinstance(
+            value,
+            str
+        ):
+
+            value = value.strip()
+
+        if not value:
+            continue
+
+        lines.append(
+            f"- {label}: {value}"
+        )
+
+    if len(lines) == 1:
+
+        return (
+            "The system information tool returned "
+            "no readable information."
+        )
+
+    return "\n".join(
+        lines
+    )
 
 
 # ============================================================
@@ -1620,15 +2362,14 @@ def analyze_intent(user_input):
 def ask_benvin(message):
     """
     Public conversational API.
+
+    This function analyzes the request but does not
+    execute computer actions.
     """
 
     intent = analyze_intent(
         message
     )
-
-    # --------------------------------------------------------
-    # Conversation
-    # --------------------------------------------------------
 
     if intent.get(
         "type"
@@ -1639,22 +2380,14 @@ def ask_benvin(message):
             ""
         )
 
-    # --------------------------------------------------------
-    # Error
-    # --------------------------------------------------------
-
     if intent.get(
         "type"
     ) == "error":
 
         return (
-            "I couldn't connect to my local "
-            "AI engine right now."
+            "I couldn't process that request "
+            "through my local AI engine."
         )
-
-    # --------------------------------------------------------
-    # Action
-    # --------------------------------------------------------
 
     if intent.get(
         "type"
@@ -1686,16 +2419,27 @@ def respond_to_action_result(
     Convert an actual tool execution result into
     natural language.
 
-    IMPORTANT:
+    This function does NOT execute another action.
 
-    This function only explains the supplied result.
-
-    It does not execute another action.
+    Some results are formatted deterministically because
+    accuracy is more important than LLM wording.
     """
 
-    # --------------------------------------------------------
-    # Serialize result
-    # --------------------------------------------------------
+    # ========================================================
+    # SYSTEM INFORMATION
+    # ========================================================
+
+    if action == "system_info":
+
+        formatted = (
+            _format_system_info_response(
+                result
+            )
+        )
+
+        if formatted:
+
+            return formatted
 
     try:
 
@@ -1710,10 +2454,6 @@ def respond_to_action_result(
         serialized_result = str(
             result
         )
-
-    # --------------------------------------------------------
-    # Serialize parameters
-    # --------------------------------------------------------
 
     try:
 
@@ -1820,10 +2560,6 @@ Respond with ONLY the natural-language response.
 
         pass
 
-    # --------------------------------------------------------
-    # Deterministic fallback
-    # --------------------------------------------------------
-
     readable_action = (
         str(action).replace(
             "_",
@@ -1873,7 +2609,8 @@ Respond with ONLY the natural-language response.
 
 def check_brain():
     """
-    Check whether Ollama is reachable.
+    Check whether Ollama is reachable and whether
+    the configured model is available.
     """
 
     try:
@@ -1887,19 +2624,60 @@ def check_brain():
 
         data = response.json()
 
-        models = [
-            model.get("name")
-            for model in data.get(
-                "models",
-                []
+        if not isinstance(
+            data,
+            dict
+        ):
+            raise ValueError(
+                "Ollama returned invalid model data."
             )
-        ]
+
+        models = []
+
+        for model in data.get(
+            "models",
+            []
+        ):
+
+            if not isinstance(
+                model,
+                dict
+            ):
+                continue
+
+            name = model.get(
+                "name"
+            )
+
+            if name:
+                models.append(
+                    name
+                )
 
         return {
             "success": True,
             "ollama": True,
             "model": MODEL,
+            "model_available": MODEL in models,
             "available_models": models
+        }
+
+    except requests.Timeout:
+
+        return {
+            "success": False,
+            "ollama": False,
+            "model": MODEL,
+            "error": "Ollama health check timed out."
+        }
+
+    except requests.ConnectionError:
+
+        return {
+            "success": False,
+            "ollama": False,
+            "model": MODEL,
+            "error": "Could not connect to Ollama."
         }
 
     except Exception as error:
@@ -1910,3 +2688,56 @@ def check_brain():
             "model": MODEL,
             "error": str(error)
         }
+
+
+# ============================================================
+# MODULE TEST
+# ============================================================
+
+if __name__ == "__main__":
+
+    print("=" * 60)
+    print("BENVIN BRAIN TEST")
+    print("=" * 60)
+
+    print()
+
+    health = check_brain()
+
+    print("Ollama health:")
+
+    print(
+        json.dumps(
+            health,
+            indent=2,
+            ensure_ascii=False
+        )
+    )
+
+    print()
+
+    print("Registered enabled tools:")
+
+    print(
+        build_tool_context()
+    )
+
+    print()
+
+    print("System information routing test:")
+
+    test_intent = analyze_intent(
+        "what is my computer information?"
+    )
+
+    print(
+        json.dumps(
+            test_intent,
+            indent=2,
+            ensure_ascii=False
+        )
+    )
+
+    print()
+
+    print("Brain module loaded successfully.")

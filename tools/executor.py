@@ -28,8 +28,15 @@ IMPORTANT:
         1. Validation
         2. Executor availability check
         3. Permission authorization
+
+The registry remains the single source of truth
+for which tools are allowed to exist.
 """
 
+
+# ============================================================
+# IMPORTS
+# ============================================================
 
 from tools.validator import (
     validate_action
@@ -37,6 +44,10 @@ from tools.validator import (
 
 from tools.permissions import (
     authorize_action
+)
+
+from tools.registry import (
+    list_all_tools
 )
 
 from tools.system import (
@@ -59,6 +70,17 @@ from tools.applications import (
 # ============================================================
 # EXECUTION MAP
 # ============================================================
+
+"""
+This is the controlled bridge between registered
+action names and actual Python functions.
+
+The LLM does NOT access this dictionary.
+
+It can only request an action name.
+
+The executor resolves that action name here.
+"""
 
 TOOL_FUNCTIONS = {
 
@@ -103,6 +125,12 @@ def executor_exists(action):
         bool
     """
 
+    if not isinstance(
+        action,
+        str
+    ):
+        return False
+
     return action in TOOL_FUNCTIONS
 
 
@@ -119,9 +147,74 @@ def get_executor(action):
         callable | None
     """
 
+    if not isinstance(
+        action,
+        str
+    ):
+        return None
+
     return TOOL_FUNCTIONS.get(
         action
     )
+
+
+# ============================================================
+# CHECK REGISTRY CONSISTENCY
+# ============================================================
+
+def check_registry_consistency():
+    """
+    Verify that the tool registry and executor map
+    are synchronized.
+
+    Every registered tool should have an executor.
+
+    Every executor should correspond to a registered tool.
+
+    This prevents the registry and execution layer
+    from silently drifting apart.
+
+    Returns:
+
+        {
+            "success": True,
+            "missing_executors": [],
+            "unregistered_executors": []
+        }
+    """
+
+    registered_tools = set(
+        list_all_tools()
+    )
+
+    executable_tools = set(
+        TOOL_FUNCTIONS.keys()
+    )
+
+    missing_executors = (
+        registered_tools
+        - executable_tools
+    )
+
+    unregistered_executors = (
+        executable_tools
+        - registered_tools
+    )
+
+    return {
+        "success": (
+            not missing_executors
+            and not unregistered_executors
+        ),
+
+        "missing_executors": sorted(
+            missing_executors
+        ),
+
+        "unregistered_executors": sorted(
+            unregistered_executors
+        )
+    }
 
 
 # ============================================================
@@ -281,11 +374,13 @@ def execute_action(
     # STEP 6 — HANDLE TOOL RESULT
     # ========================================================
 
-    # BENVIN tools normally return dictionaries.
-    #
-    # We deliberately handle unexpected return types so
-    # the executor itself never crashes because a future
-    # tool returned something unusual.
+    """
+    BENVIN tools normally return dictionaries.
+
+    We deliberately handle unexpected return types so
+    the executor itself never crashes because a future
+    tool returned something unusual.
+    """
 
     if isinstance(
         result,
@@ -293,9 +388,7 @@ def execute_action(
     ):
 
         # ----------------------------------------------------
-        # If the tool explicitly reports success=False,
-        # preserve that failure instead of claiming execution
-        # succeeded.
+        # Tool explicitly reported failure.
         # ----------------------------------------------------
 
         if result.get(
@@ -386,6 +479,10 @@ if __name__ == "__main__":
     print("BENVIN EXECUTOR TEST")
     print("=" * 60)
 
+    # ========================================================
+    # EXECUTABLE ACTIONS
+    # ========================================================
+
     print()
     print("Executable actions:")
 
@@ -395,6 +492,10 @@ if __name__ == "__main__":
             f"  - {action}"
         )
 
+    # ========================================================
+    # EXECUTOR STATUS
+    # ========================================================
+
     print()
     print("Executor status:")
 
@@ -402,5 +503,111 @@ if __name__ == "__main__":
         get_executor_status()
     )
 
+    # ========================================================
+    # REGISTRY CONSISTENCY
+    # ========================================================
+
     print()
-    print("Executor test complete.")
+    print("Registry consistency:")
+
+    consistency = (
+        check_registry_consistency()
+    )
+
+    print(
+        consistency
+    )
+
+    # ========================================================
+    # TEST SYSTEM INFO
+    # ========================================================
+
+    print()
+    print("Testing system_info:")
+
+    system_result = execute_action(
+        "system_info"
+    )
+
+    print(
+        system_result
+    )
+
+    # ========================================================
+    # TEST BENVIN DIRECTORY
+    # ========================================================
+
+    print()
+    print("Testing BENVIN directory listing:")
+
+    directory_result = execute_action(
+        "list_directory",
+        {
+            "path": "my Benvin folder"
+        }
+    )
+
+    print(
+        directory_result
+    )
+
+    # ========================================================
+    # TEST FILE SEARCH
+    # ========================================================
+
+    print()
+    print("Testing main.py search:")
+
+    search_result = execute_action(
+        "find_file",
+        {
+            "filename": "main.py",
+            "search_root": "my Benvin folder"
+        }
+    )
+
+    print(
+        search_result
+    )
+
+    # ========================================================
+    # TEST SECURITY
+    # ========================================================
+
+    print()
+    print("Testing filesystem security:")
+
+    security_result = execute_action(
+        "list_directory",
+        {
+            "path": r"C:\Windows"
+        }
+    )
+
+    print(
+        security_result
+    )
+
+    # ========================================================
+    # TEST INVALID ACTION
+    # ========================================================
+
+    print()
+    print("Testing invalid action:")
+
+    invalid_result = execute_action(
+        "delete_everything"
+    )
+
+    print(
+        invalid_result
+    )
+
+    # ========================================================
+    # COMPLETE
+    # ========================================================
+
+    print()
+    print("=" * 60)
+    print("EXECUTOR TEST COMPLETE")
+    print("=" * 60)

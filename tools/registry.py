@@ -3,7 +3,7 @@ BENVIN Tool Registry
 
 The registry is the single source of truth for BENVIN's tools.
 
-Every tool registered here contains:
+Every registered tool contains:
 
     - action name
     - description
@@ -23,11 +23,11 @@ Architecture:
 
     registry.py
          ↓
-    ┌────┼───────────────┐
-    ↓    ↓               ↓
-validator permissions   brain
-    ↓                    ↓
- executor            tool context
+    ┌────┼──────────────────────────────┐
+    ↓    ↓                              ↓
+validator permissions                 brain
+    ↓                                   ↓
+ executor                         tool context
     ↓
  actual tools
 """
@@ -47,7 +47,27 @@ TOOL_REGISTRY = {
         "description": (
             "Get information about the computer, "
             "operating system, hardware, Python version, "
-            "computer name, and current user."
+            "computer name, current user, memory, disk "
+            "usage, uptime, and BENVIN directory."
+        ),
+
+        "risk": "LOW",
+
+        "requires_confirmation": False,
+
+        "enabled": True,
+
+        "parameters": {}
+    },
+
+
+    "system_health": {
+        "description": (
+            "Check the computer's current health using "
+            "read-only system information. Assess memory "
+            "and system-drive storage usage, determine "
+            "overall health, identify warnings, and provide "
+            "informational recommendations."
         ),
 
         "risk": "LOW",
@@ -232,7 +252,10 @@ def get_tool(action):
         dict | None
     """
 
-    if not isinstance(action, str):
+    if not isinstance(
+        action,
+        str
+    ):
         return None
 
     return TOOL_REGISTRY.get(
@@ -249,7 +272,9 @@ def tool_exists(action):
     Return True if a tool exists and is enabled.
     """
 
-    tool = get_tool(action)
+    tool = get_tool(
+        action
+    )
 
     if tool is None:
         return False
@@ -269,7 +294,9 @@ def is_tool_enabled(action):
     Check whether a registered tool is enabled.
     """
 
-    tool = get_tool(action)
+    tool = get_tool(
+        action
+    )
 
     if tool is None:
         return False
@@ -289,7 +316,9 @@ def get_tool_description(action):
     Return the description of a registered tool.
     """
 
-    tool = get_tool(action)
+    tool = get_tool(
+        action
+    )
 
     if tool is None:
         return None
@@ -308,7 +337,9 @@ def get_tool_risk(action):
     Return the configured risk level of a tool.
     """
 
-    tool = get_tool(action)
+    tool = get_tool(
+        action
+    )
 
     if tool is None:
         return None
@@ -329,7 +360,9 @@ def tool_requires_confirmation(action):
     user confirmation.
     """
 
-    tool = get_tool(action)
+    tool = get_tool(
+        action
+    )
 
     if tool is None:
         return True
@@ -349,7 +382,9 @@ def get_tool_parameters(action):
     Return the parameter schema for the registered tool.
     """
 
-    tool = get_tool(action)
+    tool = get_tool(
+        action
+    )
 
     if tool is None:
         return None
@@ -419,3 +454,56 @@ def get_registry():
     """
 
     return TOOL_REGISTRY.copy()
+
+
+# ============================================================
+# MODULE TEST
+# ============================================================
+
+if __name__ == "__main__":
+
+    import json
+
+    print("=" * 60)
+    print("BENVIN TOOL REGISTRY TEST")
+    print("=" * 60)
+
+    print()
+
+    print(
+        f"Enabled tools: {get_tool_count()}"
+    )
+
+    print()
+
+    print(
+        "Registered tools:"
+    )
+
+    for action in list_tools():
+
+        print(
+            f"  - {action}"
+        )
+
+    print()
+
+    print(
+        "system_health definition:"
+    )
+
+    print(
+        json.dumps(
+            get_tool(
+                "system_health"
+            ),
+            indent=2,
+            ensure_ascii=False
+        )
+    )
+
+    print()
+
+    print(
+        "Registry loaded successfully."
+    )

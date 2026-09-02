@@ -138,10 +138,7 @@ def _ask_ollama(
     It never executes computer actions.
     """
 
-    if not isinstance(
-        prompt,
-        str
-    ):
+    if not isinstance(prompt, str):
         raise ValueError(
             "Prompt must be a string."
         )
@@ -173,10 +170,7 @@ def _ask_ollama(
 
     data = response.json()
 
-    if not isinstance(
-        data,
-        dict
-    ):
+    if not isinstance(data, dict):
         raise ValueError(
             "Ollama returned an invalid response."
         )
@@ -186,10 +180,7 @@ def _ask_ollama(
         ""
     )
 
-    if not isinstance(
-        result,
-        str
-    ):
+    if not isinstance(result, str):
         return ""
 
     return result.strip()
@@ -212,9 +203,7 @@ def build_tool_context():
 
     for action in list_tools():
 
-        definition = get_tool(
-            action
-        )
+        definition = get_tool(action)
 
         if definition is None:
             continue
@@ -311,9 +300,7 @@ def build_memory_context(user_input):
                 f"- {content}"
             )
 
-    return "\n".join(
-        context
-    )
+    return "\n".join(context)
 
 
 # ============================================================
@@ -588,9 +575,6 @@ def _is_system_info_request(text):
 
     These requests MUST NOT be delegated to Qwen3 because
     Qwen3 does not have direct access to the computer.
-
-    Returns:
-        bool
     """
 
     if not isinstance(
@@ -599,14 +583,12 @@ def _is_system_info_request(text):
     ):
         return False
 
-    normalized = _normalize_text(
-        text
-    )
+    normalized = _normalize_text(text)
 
     if not normalized:
         return False
 
-    exact_patterns = [
+    patterns = [
         r"\bwhat is my computer information\b",
         r"\bwhat is my computer info\b",
         r"\bwhat's my computer information\b",
@@ -655,7 +637,72 @@ def _is_system_info_request(text):
             normalized,
             re.IGNORECASE
         )
-        for pattern in exact_patterns
+        for pattern in patterns
+    )
+
+
+# ============================================================
+# SYSTEM HEALTH REQUEST DETECTION
+# ============================================================
+
+def _is_system_health_request(text):
+    """
+    Detect requests asking BENVIN to assess the actual
+    computer's current health.
+
+    These requests MUST be routed to the real
+    system_health tool.
+
+    Qwen3 must not guess the computer's health.
+    """
+
+    if not isinstance(
+        text,
+        str
+    ):
+        return False
+
+    normalized = _normalize_text(text)
+
+    if not normalized:
+        return False
+
+    patterns = [
+        r"\bsystem health\b",
+        r"\bcomputer health\b",
+        r"\bpc health\b",
+        r"\blaptop health\b",
+
+        r"\bcheck my system health\b",
+        r"\bcheck my computer health\b",
+        r"\bcheck my pc health\b",
+        r"\bcheck my laptop health\b",
+
+        r"\bcheck system health\b",
+        r"\bcheck computer health\b",
+        r"\bcheck pc health\b",
+        r"\bcheck laptop health\b",
+
+        r"\bhow healthy is my computer\b",
+        r"\bhow healthy is my pc\b",
+        r"\bhow healthy is my laptop\b",
+
+        r"\bis my computer healthy\b",
+        r"\bis my pc healthy\b",
+        r"\bis my laptop healthy\b",
+
+        r"\bcheck my computer\b",
+        r"\bcheck my pc\b",
+        r"\bcheck my laptop\b",
+    ]
+
+    return any(
+        re.search(
+            pattern,
+            normalized,
+            re.IGNORECASE
+        )
+        for pattern in patterns
     )
 
 
@@ -681,7 +728,7 @@ def _extract_filename(text):
         )?
         ["'`]?
         (
-            [A-Za-z0-9_\-\.]+
+            [A-Za-z0-9_\-\.\\]+
             \.[A-Za-z0-9_\-]+
         )
         ["'`]?
@@ -942,13 +989,10 @@ def _extract_location_hint(text):
 
     patterns = [
 
-        r"\bin\s+(?:my\s+)?([A-Za-z0-9_\- ]+?)\s+folder\b",
+        r"\bin\s+(?:my\s+)?([A-Za-z0-9_\-\\ ]+?)\s+folder\b",
 
-        r"\bin\s+(?:the\s+)?([A-Za-z0-9_\- ]+?)\s+folder\b",
+        r"\bin\s+(?:the\s+)?([A-Za-z0-9_\-\\ ]+?)\s+folder\b",
 
-        r"\bon\s+(?:my\s+)?([A-Za-z0-9_\- ]+?)\b",
-
-        r"\bin\s+(?:my\s+)?([A-Za-z0-9_\- ]+?)\b",
     ]
 
     for pattern in patterns:
@@ -982,6 +1026,10 @@ def _extract_location_hint(text):
     return None
 
 
+# ============================================================
+# CONTEXT REFERENCE DETECTION
+# ============================================================
+
 def _contains_context_reference(text):
     """
     Detect common contextual references.
@@ -1000,6 +1048,9 @@ def _contains_context_reference(text):
         r"\bthat\b",
         r"\bthe same\b",
         r"\bagain\b",
+        r"\bthe file\b",
+        r"\bthe folder\b",
+        r"\bthe path\b",
     ]
 
     return any(
@@ -1042,9 +1093,7 @@ def _build_deterministic_action_intent(
     # SYSTEM INFORMATION
     # ========================================================
 
-    if _is_system_info_request(
-        text
-    ):
+    if _is_system_info_request(text):
 
         intent = {
             "type": "action",
@@ -1052,10 +1101,24 @@ def _build_deterministic_action_intent(
             "parameters": {}
         }
 
-        if _validate_registered_action(
-            intent
-        ):
+        if _validate_registered_action(intent):
+            return intent
 
+        return None
+
+    # ========================================================
+    # SYSTEM HEALTH
+    # ========================================================
+
+    if _is_system_health_request(text):
+
+        intent = {
+            "type": "action",
+            "action": "system_health",
+            "parameters": {}
+        }
+
+        if _validate_registered_action(intent):
             return intent
 
         return None
@@ -1064,9 +1127,7 @@ def _build_deterministic_action_intent(
     # LIST APPLICATIONS
     # ========================================================
 
-    if _is_list_applications_request(
-        text
-    ):
+    if _is_list_applications_request(text):
 
         intent = {
             "type": "action",
@@ -1074,10 +1135,7 @@ def _build_deterministic_action_intent(
             "parameters": {}
         }
 
-        if _validate_registered_action(
-            intent
-        ):
-
+        if _validate_registered_action(intent):
             return intent
 
         return None
@@ -1086,9 +1144,7 @@ def _build_deterministic_action_intent(
     # OPEN APPLICATION
     # ========================================================
 
-    if _is_open_application_request(
-        text
-    ):
+    if _is_open_application_request(text):
 
         application = _extract_application_name(
             text
@@ -1104,10 +1160,7 @@ def _build_deterministic_action_intent(
                 }
             }
 
-            if _validate_registered_action(
-                intent
-            ):
-
+            if _validate_registered_action(intent):
                 return intent
 
     # ========================================================
@@ -1133,13 +1186,9 @@ def _build_deterministic_action_intent(
 
         if location:
 
-            parameters[
-                "search_root"
-            ] = location
+            parameters["search_root"] = location
 
-        elif _contains_context_reference(
-            text
-        ):
+        elif _contains_context_reference(text):
 
             previous_path = (
                 _resolve_contextual_path()
@@ -1147,9 +1196,7 @@ def _build_deterministic_action_intent(
 
             if previous_path:
 
-                parameters[
-                    "search_root"
-                ] = previous_path
+                parameters["search_root"] = previous_path
 
         intent = {
             "type": "action",
@@ -1157,19 +1204,14 @@ def _build_deterministic_action_intent(
             "parameters": parameters
         }
 
-        if _validate_registered_action(
-            intent
-        ):
-
+        if _validate_registered_action(intent):
             return intent
 
     # ========================================================
     # LIST DIRECTORY
     # ========================================================
 
-    if _is_directory_listing_request(
-        text
-    ):
+    if _is_directory_listing_request(text):
 
         location = _extract_location_hint(
             text
@@ -1183,9 +1225,7 @@ def _build_deterministic_action_intent(
 
             path = "Desktop"
 
-        elif _contains_context_reference(
-            text
-        ):
+        elif _contains_context_reference(text):
 
             previous_path = (
                 _resolve_contextual_path()
@@ -1211,19 +1251,14 @@ def _build_deterministic_action_intent(
             }
         }
 
-        if _validate_registered_action(
-            intent
-        ):
-
+        if _validate_registered_action(intent):
             return intent
 
     # ========================================================
     # PATH EXISTS
     # ========================================================
 
-    if _is_path_exists_request(
-        text
-    ):
+    if _is_path_exists_request(text):
 
         filename = _extract_filename(
             text
@@ -1235,9 +1270,7 @@ def _build_deterministic_action_intent(
 
         if filename and location:
 
-            path = (
-                f"{location}\\{filename}"
-            )
+            path = f"{location}\\{filename}"
 
         elif filename:
 
@@ -1247,9 +1280,7 @@ def _build_deterministic_action_intent(
 
             path = location
 
-        elif _contains_context_reference(
-            text
-        ):
+        elif _contains_context_reference(text):
 
             previous_path = (
                 _resolve_contextual_path()
@@ -1275,19 +1306,14 @@ def _build_deterministic_action_intent(
             }
         }
 
-        if _validate_registered_action(
-            intent
-        ):
-
+        if _validate_registered_action(intent):
             return intent
 
     # ========================================================
     # FILE INFORMATION
     # ========================================================
 
-    if _is_file_info_request(
-        text
-    ):
+    if _is_file_info_request(text):
 
         filename = _extract_filename(
             text
@@ -1299,9 +1325,7 @@ def _build_deterministic_action_intent(
 
         if filename and location:
 
-            path = (
-                f"{location}\\{filename}"
-            )
+            path = f"{location}\\{filename}"
 
         elif filename:
 
@@ -1311,9 +1335,7 @@ def _build_deterministic_action_intent(
 
             path = location
 
-        elif _contains_context_reference(
-            text
-        ):
+        elif _contains_context_reference(text):
 
             previous_path = (
                 _resolve_contextual_path()
@@ -1339,10 +1361,7 @@ def _build_deterministic_action_intent(
             }
         }
 
-        if _validate_registered_action(
-            intent
-        ):
-
+        if _validate_registered_action(intent):
             return intent
 
     return None
@@ -1480,6 +1499,32 @@ disk, or system:
 Do NOT answer with guessed system information.
 
 ============================================================
+SYSTEM HEALTH
+============================================================
+
+If the user asks to check, assess, inspect, or report
+the actual health of their computer, PC, laptop, memory,
+RAM, disk, or overall system condition:
+
+    use:
+
+    {{
+        "type": "action",
+        "action": "system_health",
+        "parameters": {{}}
+    }}
+
+Do NOT guess the computer's health.
+
+Do NOT invent RAM usage.
+
+Do NOT invent disk usage.
+
+Do NOT invent health warnings.
+
+The system_health tool provides the actual information.
+
+============================================================
 COMMON ACTION MAPPINGS
 ============================================================
 
@@ -1533,6 +1578,12 @@ COMMON ACTION MAPPINGS
 
 "show my computer specifications"
     -> system_info
+
+"check my computer health"
+    -> system_health
+
+"check my system health"
+    -> system_health
 
 "what is Python"
     -> conversation
@@ -1612,19 +1663,21 @@ STRICT OUTPUT RULES
 
 14. Never invent system information.
 
-15. If the user asks a normal knowledge question,
+15. Never invent system health information.
+
+16. If the user asks a normal knowledge question,
     use "conversation".
 
-16. If the user clearly asks for a registered computer
+17. If the user clearly asks for a registered computer
     operation, use "action".
 
-17. If the request is ambiguous and does not clearly
+18. If the request is ambiguous and does not clearly
     require a computer action, use "conversation".
 
-18. For filesystem actions, provide the user's symbolic
+19. For filesystem actions, provide the user's symbolic
     path/name when possible. Do not invent absolute paths.
 
-19. The executor is responsible for determining whether
+20. The executor is responsible for determining whether
     the requested action actually succeeds.
 
 ============================================================
@@ -1657,9 +1710,7 @@ def _extract_json(text):
 
     try:
 
-        parsed = json.loads(
-            text
-        )
+        parsed = json.loads(text)
 
         if isinstance(
             parsed,
@@ -1685,9 +1736,7 @@ def _extract_json(text):
 
     try:
 
-        parsed = json.loads(
-            cleaned
-        )
+        parsed = json.loads(cleaned)
 
         if isinstance(
             parsed,
@@ -1718,9 +1767,7 @@ def _extract_json(text):
             len(cleaned)
         ):
 
-            character = cleaned[
-                index
-            ]
+            character = cleaned[index]
 
             if escaped:
 
@@ -2293,54 +2340,227 @@ def _format_system_info_response(result):
         "Here is your computer information:"
     ]
 
-    field_labels = [
-        ("operating_system", "Operating System"),
-        ("os_version", "OS Version"),
-        ("architecture", "Architecture"),
-        ("machine", "Machine"),
-        ("processor", "Processor"),
-        ("memory", "Memory"),
-        ("disk", "Disk"),
-        ("python_version", "Python"),
-        ("computer_name", "Computer Name"),
-        ("username", "User"),
-        ("uptime", "Uptime"),
-        ("benvin_directory", "BENVIN Directory"),
-    ]
+    operating_system = data.get(
+        "operating_system"
+    )
 
-    for key, label in field_labels:
+    if isinstance(
+        operating_system,
+        dict
+    ):
 
-        value = data.get(
-            key
-        )
+        name = operating_system.get("name")
+        version = operating_system.get("version")
+        release = operating_system.get("release")
+        architecture = operating_system.get("architecture")
 
-        if value is None:
-            continue
-
-        if isinstance(
-            value,
-            dict
-        ):
-
-            value = ", ".join(
-                f"{sub_key}: {sub_value}"
-                for sub_key, sub_value
-                in value.items()
-                if sub_value is not None
+        if name:
+            lines.append(
+                f"- Operating System: {name}"
             )
 
-        if isinstance(
-            value,
-            str
-        ):
+        if version:
+            lines.append(
+                f"- OS Version: {version}"
+            )
 
-            value = value.strip()
+        if release:
+            lines.append(
+                f"- OS Release: {release}"
+            )
 
-        if not value:
-            continue
+        if architecture:
+            lines.append(
+                f"- Architecture: {architecture}"
+            )
 
+    processor = data.get(
+        "processor"
+    )
+
+    if isinstance(
+        processor,
+        dict
+    ):
+
+        processor_name = processor.get(
+            "processor"
+        )
+
+        machine = processor.get(
+            "machine"
+        )
+
+        if processor_name:
+            lines.append(
+                f"- Processor: {processor_name}"
+            )
+
+        if machine:
+            lines.append(
+                f"- Machine: {machine}"
+            )
+
+    memory = data.get(
+        "memory"
+    )
+
+    if isinstance(
+        memory,
+        dict
+    ):
+
+        total_gb = memory.get(
+            "total_gb"
+        )
+
+        available_gb = memory.get(
+            "available_gb"
+        )
+
+        used_gb = memory.get(
+            "used_gb"
+        )
+
+        usage_percent = memory.get(
+            "usage_percent"
+        )
+
+        if total_gb is not None:
+            lines.append(
+                f"- RAM Total: {total_gb} GB"
+            )
+
+        if used_gb is not None:
+            lines.append(
+                f"- RAM Used: {used_gb} GB"
+            )
+
+        if available_gb is not None:
+            lines.append(
+                f"- RAM Available: {available_gb} GB"
+            )
+
+        if usage_percent is not None:
+            lines.append(
+                f"- RAM Usage: {usage_percent}%"
+            )
+
+    disk = data.get(
+        "disk"
+    )
+
+    if isinstance(
+        disk,
+        dict
+    ):
+
+        drive = disk.get(
+            "drive"
+        )
+
+        total_gb = disk.get(
+            "total_gb"
+        )
+
+        used_gb = disk.get(
+            "used_gb"
+        )
+
+        free_gb = disk.get(
+            "free_gb"
+        )
+
+        usage_percent = disk.get(
+            "usage_percent"
+        )
+
+        if drive:
+            lines.append(
+                f"- Disk Drive: {drive}"
+            )
+
+        if total_gb is not None:
+            lines.append(
+                f"- Disk Total: {total_gb} GB"
+            )
+
+        if used_gb is not None:
+            lines.append(
+                f"- Disk Used: {used_gb} GB"
+            )
+
+        if free_gb is not None:
+            lines.append(
+                f"- Disk Free: {free_gb} GB"
+            )
+
+        if usage_percent is not None:
+            lines.append(
+                f"- Disk Usage: {usage_percent}%"
+            )
+
+    python_info = data.get(
+        "python"
+    )
+
+    if isinstance(
+        python_info,
+        dict
+    ):
+
+        version = python_info.get(
+            "version"
+        )
+
+        implementation = python_info.get(
+            "implementation"
+        )
+
+        if version:
+            lines.append(
+                f"- Python: {version}"
+            )
+
+        if implementation:
+            lines.append(
+                f"- Python Implementation: {implementation}"
+            )
+
+    computer_name = data.get(
+        "computer_name"
+    )
+
+    username = data.get(
+        "username"
+    )
+
+    uptime = data.get(
+        "uptime"
+    )
+
+    benvin_directory = data.get(
+        "benvin_directory"
+    )
+
+    if computer_name:
         lines.append(
-            f"- {label}: {value}"
+            f"- Computer Name: {computer_name}"
+        )
+
+    if username:
+        lines.append(
+            f"- User: {username}"
+        )
+
+    if uptime:
+        lines.append(
+            f"- Uptime: {uptime}"
+        )
+
+    if benvin_directory:
+        lines.append(
+            f"- BENVIN Directory: {benvin_directory}"
         )
 
     if len(lines) == 1:
@@ -2350,9 +2570,217 @@ def _format_system_info_response(result):
             "no readable information."
         )
 
-    return "\n".join(
-        lines
+    return "\n".join(lines)
+
+
+# ============================================================
+# SYSTEM HEALTH RESPONSE
+# ============================================================
+
+def _format_system_health_response(result):
+    """
+    Format the actual system_health tool result
+    deterministically.
+
+    This function does not calculate health itself.
+
+    It only reports the values supplied by the
+    trusted system_health tool.
+    """
+
+    if not isinstance(
+        result,
+        dict
+    ):
+        return None
+
+    if not result.get(
+        "success"
+    ):
+        return None
+
+    data = result.get(
+        "result"
     )
+
+    if not isinstance(
+        data,
+        dict
+    ):
+        return None
+
+    lines = [
+        "Here is the current computer health assessment:"
+    ]
+
+    overall_status = data.get(
+        "overall_status"
+    )
+
+    assessment_completeness = data.get(
+        "assessment_completeness"
+    )
+
+    priority = data.get(
+        "priority"
+    )
+
+    if overall_status:
+        lines.append(
+            f"- Overall Status: {overall_status}"
+        )
+
+    if assessment_completeness:
+        lines.append(
+            f"- Assessment: {assessment_completeness}"
+        )
+
+    if priority:
+        lines.append(
+            f"- Priority: {priority}"
+        )
+
+    memory = data.get(
+        "memory"
+    )
+
+    if isinstance(
+        memory,
+        dict
+    ):
+
+        status = memory.get(
+            "status"
+        )
+
+        usage_percent = memory.get(
+            "usage_percent"
+        )
+
+        available_gb = memory.get(
+            "available_gb"
+        )
+
+        used_gb = memory.get(
+            "used_gb"
+        )
+
+        message = memory.get(
+            "message"
+        )
+
+        memory_line = "- Memory"
+
+        if status:
+            memory_line += f": {status}"
+
+        if usage_percent is not None:
+            memory_line += f" ({usage_percent}% used)"
+
+        lines.append(
+            memory_line
+        )
+
+        if used_gb is not None:
+            lines.append(
+                f"  - Used: {used_gb} GB"
+            )
+
+        if available_gb is not None:
+            lines.append(
+                f"  - Available: {available_gb} GB"
+            )
+
+        if message:
+            lines.append(
+                f"  - {message}"
+            )
+
+    disk = data.get(
+        "disk"
+    )
+
+    if isinstance(
+        disk,
+        dict
+    ):
+
+        status = disk.get(
+            "status"
+        )
+
+        drive = disk.get(
+            "drive"
+        )
+
+        usage_percent = disk.get(
+            "usage_percent"
+        )
+
+        free_gb = disk.get(
+            "free_gb"
+        )
+
+        message = disk.get(
+            "message"
+        )
+
+        disk_line = "- Disk"
+
+        if drive:
+            disk_line += f" ({drive})"
+
+        if status:
+            disk_line += f": {status}"
+
+        if usage_percent is not None:
+            disk_line += f" ({usage_percent}% used)"
+
+        lines.append(
+            disk_line
+        )
+
+        if free_gb is not None:
+            lines.append(
+                f"  - Free: {free_gb} GB"
+            )
+
+        if message:
+            lines.append(
+                f"  - {message}"
+            )
+
+    recommendations = data.get(
+        "recommendations"
+    )
+
+    if isinstance(
+        recommendations,
+        list
+    ) and recommendations:
+
+        lines.append("")
+        lines.append("Recommendations:")
+
+        for recommendation in recommendations:
+
+            if isinstance(
+                recommendation,
+                str
+            ) and recommendation.strip():
+
+                lines.append(
+                    f"- {recommendation.strip()}"
+                )
+
+    if len(lines) == 1:
+
+        return (
+            "The system health tool returned "
+            "no readable health information."
+        )
+
+    return "\n".join(lines)
 
 
 # ============================================================
@@ -2438,7 +2866,21 @@ def respond_to_action_result(
         )
 
         if formatted:
+            return formatted
 
+    # ========================================================
+    # SYSTEM HEALTH
+    # ========================================================
+
+    if action == "system_health":
+
+        formatted = (
+            _format_system_health_response(
+                result
+            )
+        )
+
+        if formatted:
             return formatted
 
     try:
@@ -2733,6 +3175,22 @@ if __name__ == "__main__":
     print(
         json.dumps(
             test_intent,
+            indent=2,
+            ensure_ascii=False
+        )
+    )
+
+    print()
+
+    print("System health routing test:")
+
+    health_intent = analyze_intent(
+        "check my computer health"
+    )
+
+    print(
+        json.dumps(
+            health_intent,
             indent=2,
             ensure_ascii=False
         )

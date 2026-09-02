@@ -14,7 +14,40 @@ IMPORTANT:
         - change system settings
 
 The executor controls access to this tool.
+
+RESPONSIBILITY:
+
+    This module collects RAW system measurements.
+
+    Health interpretation belongs to:
+
+        tools/health.py
+
+    This separation ensures that system information and
+    health assessment have a single, consistent source
+    of truth.
+
+FEATURES:
+
+    - Operating system information
+    - CPU / processor information
+    - RAM information
+    - Disk information
+    - Computer name
+    - Current username
+    - Python version
+    - System uptime
+    - BENVIN directory
+
+SECURITY:
+
+    This tool is strictly read-only.
 """
+
+
+# ============================================================
+# IMPORTS
+# ============================================================
 
 import ctypes
 import getpass
@@ -26,6 +59,13 @@ import time
 
 
 # ============================================================
+# CONSTANTS
+# ============================================================
+
+BYTES_PER_GB = 1024 ** 3
+
+
+# ============================================================
 # MEMORY
 # ============================================================
 
@@ -33,23 +73,24 @@ def _get_memory_information():
     """
     Retrieve physical memory information.
 
-    Uses Windows API when available.
+    Uses the Windows GlobalMemoryStatusEx API when
+    running on Windows.
 
     Returns:
         dict
     """
 
+    empty_result = {
+        "total_gb": None,
+        "available_gb": None,
+        "used_gb": None,
+        "usage_percent": None
+    }
+
     if os.name != "nt":
+        return empty_result
 
-        return {
-            "total_gb": None,
-            "available_gb": None,
-            "used_gb": None
-        }
-
-    class MEMORYSTATUSEX(
-        ctypes.Structure
-    ):
+    class MEMORYSTATUSEX(ctypes.Structure):
         _fields_ = [
             (
                 "dwLength",
@@ -96,44 +137,43 @@ def _get_memory_information():
     )
 
     try:
-
-        result = ctypes.windll.kernel32.GlobalMemoryStatusEx(
-            ctypes.byref(status)
+        result = (
+            ctypes.windll.kernel32
+            .GlobalMemoryStatusEx(
+                ctypes.byref(status)
+            )
         )
 
     except Exception:
-
-        return {
-            "total_gb": None,
-            "available_gb": None,
-            "used_gb": None
-        }
+        return empty_result
 
     if not result:
-
-        return {
-            "total_gb": None,
-            "available_gb": None,
-            "used_gb": None
-        }
+        return empty_result
 
     total = status.ullTotalPhys
     available = status.ullAvailPhys
+
+    if total <= 0:
+        return empty_result
+
     used = total - available
 
     return {
         "total_gb": round(
-            total / (1024 ** 3),
+            total / BYTES_PER_GB,
             2
         ),
+
         "available_gb": round(
-            available / (1024 ** 3),
+            available / BYTES_PER_GB,
             2
         ),
+
         "used_gb": round(
-            used / (1024 ** 3),
+            used / BYTES_PER_GB,
             2
         ),
+
         "usage_percent": int(
             status.dwMemoryLoad
         )
@@ -152,6 +192,14 @@ def _get_disk_information():
         dict
     """
 
+    empty_result = {
+        "drive": None,
+        "total_gb": None,
+        "used_gb": None,
+        "free_gb": None,
+        "usage_percent": None
+    }
+
     try:
 
         drive = os.environ.get(
@@ -159,43 +207,48 @@ def _get_disk_information():
             "C:"
         )
 
+        root = (
+            drive + "\\"
+            if os.name == "nt"
+            else "/"
+        )
+
         total, used, free = (
-            shutil.disk_usage(
-                drive + "\\"
-                if os.name == "nt"
-                else "/"
+            shutil.disk_usage(root)
+        )
+
+        usage_percent = (
+            round(
+                (used / total) * 100,
+                1
             )
+            if total
+            else None
         )
 
         return {
             "drive": drive,
+
             "total_gb": round(
-                total / (1024 ** 3),
+                total / BYTES_PER_GB,
                 2
             ),
+
             "used_gb": round(
-                used / (1024 ** 3),
+                used / BYTES_PER_GB,
                 2
             ),
+
             "free_gb": round(
-                free / (1024 ** 3),
+                free / BYTES_PER_GB,
                 2
             ),
-            "usage_percent": round(
-                (used / total) * 100,
-                1
-            ) if total else None
+
+            "usage_percent": usage_percent
         }
 
     except Exception:
-
-        return {
-            "drive": None,
-            "total_gb": None,
-            "used_gb": None,
-            "free_gb": None,
-            "usage_percent": None
-        }
+        return empty_result
 
 
 # ============================================================
@@ -207,6 +260,9 @@ def _get_uptime():
     Retrieve system uptime.
 
     Uses Windows GetTickCount64 when available.
+
+    Returns:
+        str | None
     """
 
     if os.name == "nt":
@@ -214,7 +270,8 @@ def _get_uptime():
         try:
 
             milliseconds = (
-                ctypes.windll.kernel32.GetTickCount64()
+                ctypes.windll.kernel32
+                .GetTickCount64()
             )
 
             seconds = int(
@@ -241,7 +298,6 @@ def _get_uptime():
             seconds = None
 
     if seconds is None:
-
         return None
 
     days = seconds // 86400
@@ -259,16 +315,19 @@ def _get_uptime():
     parts = []
 
     if days:
+
         parts.append(
             f"{days}d"
         )
 
     if hours:
+
         parts.append(
             f"{hours}h"
         )
 
     if minutes:
+
         parts.append(
             f"{minutes}m"
         )
@@ -285,6 +344,147 @@ def _get_uptime():
 
 
 # ============================================================
+# OPERATING SYSTEM
+# ============================================================
+
+def _get_operating_system_information():
+    """
+    Retrieve operating system information.
+
+    Returns:
+        dict
+    """
+
+    return {
+        "name": (
+            platform.system()
+            or "Unknown"
+        ),
+
+        "version": (
+            platform.version()
+            or "Unknown"
+        ),
+
+        "release": (
+            platform.release()
+            or "Unknown"
+        ),
+
+        "architecture": (
+            platform.architecture()[0]
+            or "Unknown"
+        )
+    }
+
+
+# ============================================================
+# PROCESSOR
+# ============================================================
+
+def _get_processor_information():
+    """
+    Retrieve processor information.
+
+    Returns:
+        dict
+    """
+
+    processor = (
+        platform.processor()
+        or "Unknown"
+    )
+
+    machine = (
+        platform.machine()
+        or "Unknown"
+    )
+
+    return {
+        "processor": processor,
+        "machine": machine
+    }
+
+
+# ============================================================
+# COMPUTER NAME
+# ============================================================
+
+def _get_computer_name():
+    """
+    Retrieve the computer name safely.
+
+    Returns:
+        str
+    """
+
+    try:
+
+        name = platform.node()
+
+        if name:
+            return name
+
+    except Exception:
+        pass
+
+    try:
+
+        name = os.environ.get(
+            "COMPUTERNAME"
+        )
+
+        if name:
+            return name
+
+    except Exception:
+        pass
+
+    return "Unknown"
+
+
+# ============================================================
+# USERNAME
+# ============================================================
+
+def _get_username():
+    """
+    Retrieve the current username safely.
+
+    getpass.getuser() is preferred over os.getlogin()
+    because it is more reliable when Python is launched
+    from terminals, services, remote sessions, or IDEs.
+
+    Returns:
+        str
+    """
+
+    try:
+
+        username = getpass.getuser()
+
+        if username:
+            return username
+
+    except Exception:
+        pass
+
+    try:
+
+        username = os.environ.get(
+            "USERNAME"
+        )
+
+        if username:
+            return username
+
+    except Exception:
+        pass
+
+    return "Unknown"
+
+
+# ============================================================
 # BENVIN DIRECTORY
 # ============================================================
 
@@ -292,6 +492,9 @@ def _get_benvin_directory():
     """
     Return the directory containing the running BENVIN
     application.
+
+    Returns:
+        str | None
     """
 
     try:
@@ -306,45 +509,25 @@ def _get_benvin_directory():
 
 
 # ============================================================
-# USERNAME
+# PYTHON
 # ============================================================
 
-def _get_username():
+def _get_python_information():
     """
-    Retrieve the current username safely.
+    Retrieve Python runtime information.
 
-    getpass.getuser() is preferred over os.getlogin()
-    because it is more reliable when Python is launched
-    from terminals, services, remote sessions, or IDEs.
+    Returns:
+        dict
     """
 
-    try:
+    return {
+        "version": sys.version.split()[0],
 
-        username = getpass.getuser()
-
-        if username:
-
-            return username
-
-    except Exception:
-
-        pass
-
-    try:
-
-        username = os.environ.get(
-            "USERNAME"
+        "implementation": (
+            platform.python_implementation()
+            or "Unknown"
         )
-
-        if username:
-
-            return username
-
-    except Exception:
-
-        pass
-
-    return None
+    }
 
 
 # ============================================================
@@ -355,40 +538,57 @@ def get_system_info():
     """
     Retrieve read-only system information.
 
+    This is the main public API used by BENVIN.
+
+    IMPORTANT:
+
+        This function reports raw system measurements.
+
+        It does NOT perform health assessment.
+
+        Health interpretation belongs to tools/health.py.
+
     Returns:
         dict
     """
 
+    operating_system = (
+        _get_operating_system_information()
+    )
+
+    processor = (
+        _get_processor_information()
+    )
+
+    memory = (
+        _get_memory_information()
+    )
+
+    disk = (
+        _get_disk_information()
+    )
+
+    python = (
+        _get_python_information()
+    )
+
     return {
-        "operating_system": platform.system(),
+        "operating_system": operating_system,
 
-        "os_version": platform.version(),
+        "processor": processor,
 
-        "architecture": platform.architecture()[0],
+        "memory": memory,
 
-        "machine": platform.machine(),
+        "disk": disk,
 
-        "processor": (
-            platform.processor()
-            or "Unknown"
-        ),
-
-        "memory": _get_memory_information(),
-
-        "disk": _get_disk_information(),
+        "python": python,
 
         "computer_name": (
-            platform.node()
-            or "Unknown"
+            _get_computer_name()
         ),
 
         "username": (
             _get_username()
-            or "Unknown"
-        ),
-
-        "python_version": (
-            sys.version.split()[0]
         ),
 
         "uptime": (
@@ -409,6 +609,8 @@ def get_system_info():
 
 if __name__ == "__main__":
 
+    import json
+
     print("=" * 60)
     print("BENVIN SYSTEM INFORMATION TEST")
     print("=" * 60)
@@ -417,8 +619,16 @@ if __name__ == "__main__":
 
     information = get_system_info()
 
-    for key, value in information.items():
-
-        print(
-            f"{key}: {value}"
+    print(
+        json.dumps(
+            information,
+            indent=2,
+            ensure_ascii=False
         )
+    )
+
+    print()
+
+    print("=" * 60)
+    print("SYSTEM INFORMATION TEST COMPLETE")
+    print("=" * 60)

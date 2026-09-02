@@ -54,6 +54,10 @@ from tools.system import (
     get_system_info
 )
 
+from tools.health import (
+    get_system_health
+)
+
 from tools.files import (
     list_directory,
     find_file,
@@ -89,6 +93,8 @@ TOOL_FUNCTIONS = {
     # --------------------------------------------------------
 
     "system_info": get_system_info,
+
+    "system_health": get_system_health,
 
     # --------------------------------------------------------
     # FILESYSTEM
@@ -355,9 +361,7 @@ def execute_action(
         return {
             "success": False,
             "action": action,
-            "status": (
-                "execution_parameter_error"
-            ),
+            "status": "execution_parameter_error",
             "error": str(error)
         }
 
@@ -398,9 +402,7 @@ def execute_action(
             return {
                 "success": False,
                 "action": action,
-                "status": (
-                    "tool_execution_failed"
-                ),
+                "status": "tool_execution_failed",
                 "error": result.get(
                     "error",
                     "The tool reported an execution failure."
@@ -534,6 +536,21 @@ if __name__ == "__main__":
     )
 
     # ========================================================
+    # TEST SYSTEM HEALTH
+    # ========================================================
+
+    print()
+    print("Testing system_health:")
+
+    health_result = execute_action(
+        "system_health"
+    )
+
+    print(
+        health_result
+    )
+
+    # ========================================================
     # TEST BENVIN DIRECTORY
     # ========================================================
 
@@ -571,7 +588,7 @@ if __name__ == "__main__":
     )
 
     # ========================================================
-    # TEST SECURITY
+    # TEST FILESYSTEM SECURITY
     # ========================================================
 
     print()

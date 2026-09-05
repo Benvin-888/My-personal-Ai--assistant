@@ -1,14 +1,8 @@
 """
-APEX / BENVIN Strategy Intelligence Models
+APEX / BENVIN Strategy Intelligence Models.
 
-Phase 2.4.1 - Strategy Foundation
-
-These models define the contracts between deterministic strategy logic and
-future backtesting/paper-trading layers.
-
-IMPORTANT:
-    These models describe strategy evaluations only. They do not execute
-    orders, connect to brokers, size positions, or promise profitability.
+Phase 2.4.2 hardening: deterministic, explainable strategy contracts.
+These models describe strategy conclusions only; they never execute orders.
 """
 
 from dataclasses import dataclass, field
@@ -18,16 +12,12 @@ from typing import Any
 
 
 class SignalDirection(str, Enum):
-    """Normalized strategy direction."""
-
     LONG = "LONG"
     SHORT = "SHORT"
     NEUTRAL = "NEUTRAL"
 
 
 class EvaluationStatus(str, Enum):
-    """Outcome of evaluating a strategy against available market data."""
-
     EVALUATED = "EVALUATED"
     INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
     INVALID_INPUT = "INVALID_INPUT"
@@ -35,8 +25,6 @@ class EvaluationStatus(str, Enum):
 
 
 class ConditionStatus(str, Enum):
-    """State of one deterministic strategy condition."""
-
     SATISFIED = "SATISFIED"
     NOT_SATISFIED = "NOT_SATISFIED"
     UNAVAILABLE = "UNAVAILABLE"
@@ -44,8 +32,6 @@ class ConditionStatus(str, Enum):
 
 @dataclass(frozen=True)
 class StrategyCondition:
-    """Declarative description of one strategy condition."""
-
     condition_id: str
     name: str
     description: str
@@ -55,18 +41,23 @@ class StrategyCondition:
     expected: Any = None
     weight: float = 1.0
     metadata: dict[str, Any] = field(default_factory=dict)
+    direction: SignalDirection | None = None
 
     def __post_init__(self):
-        if not self.condition_id or not isinstance(self.condition_id, str):
+        if not isinstance(self.condition_id, str) or not self.condition_id.strip():
             raise ValueError("condition_id must be a non-empty string")
-        if not self.name or not isinstance(self.name, str):
+        if not isinstance(self.name, str) or not self.name.strip():
             raise ValueError("name must be a non-empty string")
         if not isinstance(self.description, str):
             raise ValueError("description must be a string")
+        if not isinstance(self.status, ConditionStatus):
+            raise ValueError("status must be a ConditionStatus")
         if not isinstance(self.weight, (int, float)) or isinstance(self.weight, bool):
             raise ValueError("weight must be numeric")
         if not isfinite(float(self.weight)) or self.weight < 0:
             raise ValueError("weight must be finite and non-negative")
+        if self.direction is not None and not isinstance(self.direction, SignalDirection):
+            raise ValueError("direction must be a SignalDirection or None")
 
     def to_dict(self):
         return {
@@ -79,13 +70,12 @@ class StrategyCondition:
             "expected": self.expected,
             "weight": float(self.weight),
             "metadata": dict(self.metadata),
+            "direction": self.direction.value if self.direction else None,
         }
 
 
 @dataclass(frozen=True)
 class StrategyDefinition:
-    """Immutable metadata and configuration for a deterministic strategy."""
-
     strategy_id: str
     name: str
     version: str
@@ -99,14 +89,10 @@ class StrategyDefinition:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
-        if not self.strategy_id or not isinstance(self.strategy_id, str):
-            raise ValueError("strategy_id must be a non-empty string")
-        if not self.name or not isinstance(self.name, str):
-            raise ValueError("name must be a non-empty string")
-        if not self.version or not isinstance(self.version, str):
-            raise ValueError("version must be a non-empty string")
-        if not self.timeframe or not isinstance(self.timeframe, str):
-            raise ValueError("timeframe must be a non-empty string")
+        for field_name in ("strategy_id", "name", "version", "timeframe"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field_name} must be a non-empty string")
         if not isinstance(self.minimum_candles, int) or isinstance(self.minimum_candles, bool):
             raise ValueError("minimum_candles must be an integer")
         if self.minimum_candles < 0:
@@ -130,8 +116,6 @@ class StrategyDefinition:
 
 @dataclass(frozen=True)
 class StrategySignal:
-    """A normalized strategy conclusion without execution semantics."""
-
     direction: SignalDirection
     score: float
     rationale: str
@@ -139,6 +123,8 @@ class StrategySignal:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
+        if not isinstance(self.direction, SignalDirection):
+            raise ValueError("direction must be a SignalDirection")
         if not isinstance(self.score, (int, float)) or isinstance(self.score, bool):
             raise ValueError("score must be numeric")
         if not isfinite(float(self.score)) or not -1.0 <= float(self.score) <= 1.0:
@@ -158,8 +144,6 @@ class StrategySignal:
 
 @dataclass(frozen=True)
 class StrategyEvaluation:
-    """Complete deterministic evaluation result for one market snapshot."""
-
     strategy: StrategyDefinition
     status: EvaluationStatus
     pair: str
@@ -173,11 +157,9 @@ class StrategyEvaluation:
     error: str | None = None
 
     def __post_init__(self):
-        counts = (
-            self.condition_count,
-            self.satisfied_count,
-            self.unavailable_count,
-        )
+        if not isinstance(self.status, EvaluationStatus):
+            raise ValueError("status must be an EvaluationStatus")
+        counts = (self.condition_count, self.satisfied_count, self.unavailable_count)
         if any(not isinstance(value, int) or isinstance(value, bool) for value in counts):
             raise ValueError("strategy condition counts must be integers")
         if any(value < 0 for value in counts):
@@ -186,6 +168,15 @@ class StrategyEvaluation:
             raise ValueError("satisfied_count cannot exceed condition_count")
         if self.unavailable_count > self.condition_count:
             raise ValueError("unavailable_count cannot exceed condition_count")
+        if self.signal is not None and self.status != EvaluationStatus.EVALUATED:
+            raise ValueError("non-evaluated results cannot contain a signal")
+        if self.status == EvaluationStatus.EVALUATED and self.signal is None:
+            raise ValueError("evaluated results must contain a signal")
+
+    @property
+    def timeframe(self):
+        """Alias for interval for strategy-facing terminology."""
+        return self.interval
 
     @property
     def completeness_ratio(self):
@@ -202,6 +193,9 @@ class StrategyEvaluation:
             "strategy": self.strategy.to_dict(),
             "pair": self.pair,
             "interval": self.interval,
+            "timeframe": self.timeframe,
+            "strategy_id": self.strategy.strategy_id,
+            "strategy_version": self.strategy.version,
             "timestamp_utc": self.timestamp_utc,
             "signal": self.signal.to_dict() if self.signal else None,
             "conditions": {

@@ -51,16 +51,17 @@ def test_overbought_and_upper_band_produce_short():
     )
 
 
-def test_non_extreme_market_is_neutral_and_unavailable():
+def test_non_extreme_market_is_neutral_and_not_satisfied():
     result = MeanReversionStrategy().evaluate(
         analysis(rsi=50.0, close=1.0)
     )
 
     assert result.signal.direction == SignalDirection.NEUTRAL
     assert result.signal.score == pytest.approx(0.0)
-    assert result.unavailable_count == 2
+    assert result.satisfied_count == 0
+    assert result.unavailable_count == 0
     assert all(
-        condition.status == ConditionStatus.UNAVAILABLE
+        condition.status == ConditionStatus.NOT_SATISFIED
         for condition in result.signal.conditions
     )
 
@@ -71,19 +72,21 @@ def test_conflicting_extremes_are_conservatively_neutral():
     )
 
     assert result.signal.direction == SignalDirection.NEUTRAL
-    assert result.signal.score == pytest.approx(0.10)
+    assert result.signal.score == pytest.approx(0.0)
     assert result.signal.metadata["agreement"] == pytest.approx(0.55)
     assert result.satisfied_count == 2
+    assert result.unavailable_count == 0
 
 
-def test_one_directional_condition_can_produce_signal():
+def test_one_directional_condition_is_neutral_without_confirmation():
     result = MeanReversionStrategy().evaluate(
         analysis(rsi=25.0, close=1.0)
     )
 
-    assert result.signal.direction == SignalDirection.LONG
-    assert result.signal.score == pytest.approx(1.0)
-    assert result.unavailable_count == 1
+    assert result.signal.direction == SignalDirection.NEUTRAL
+    assert result.signal.score == pytest.approx(0.0)
+    assert result.satisfied_count == 1
+    assert result.unavailable_count == 0
 
 
 def test_insufficient_candles():

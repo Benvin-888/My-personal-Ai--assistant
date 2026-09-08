@@ -18,11 +18,17 @@ from ..models import (
 
 
 class MeanReversionStrategy(Strategy):
-    """Evaluate oversold/overbought evidence without execution semantics.
+    """Evaluate RSI/Bollinger extremes as a complete confirmation setup.
 
-    The strategy intentionally uses evidence that is complementary to the
-    trend/momentum strategy: it looks for stretched conditions rather than
-    requiring trend continuation.
+    Mean reversion is intentionally stricter than a generic weighted-evidence
+    strategy. A directional signal requires both independent extremes to be
+    present and to point in the same direction:
+
+        LONG  = RSI oversold AND close at/below lower Bollinger Band
+        SHORT = RSI overbought AND close at/above upper Bollinger Band
+
+    A partial setup, conflicting evidence, or incomplete evidence never
+    produces a directional signal.
     """
 
     DEFAULTS = {
@@ -40,13 +46,14 @@ class MeanReversionStrategy(Strategy):
 
         self.parameters = {**self.DEFAULTS, **dict(parameters or {})}
         self._validate()
+
         self._definition = StrategyDefinition(
             strategy_id="mean_reversion",
             name="Mean Reversion",
-            version="1.0.0",
+            version="1.0.1",
             description=(
-                "Deterministic RSI extreme and Bollinger Band stretch analysis "
-                "with conflict-aware weighted scoring."
+                "Deterministic RSI extreme and Bollinger Band stretch "
+                "confirmation requiring both conditions to agree."
             ),
             timeframe="5m",
             supported_pairs=(),
@@ -62,6 +69,7 @@ class MeanReversionStrategy(Strategy):
                 "execution": "none",
                 "backtest_ready": True,
                 "signal_policy": "extreme_reversion_confirmation",
+                "confirmation_policy": "all_required",
                 "versioning_policy": "semantic",
             },
         )
@@ -73,7 +81,9 @@ class MeanReversionStrategy(Strategy):
     def evaluate(self, analysis: dict[str, Any]) -> StrategyEvaluation:
         if not isinstance(analysis, dict):
             return self._insufficient(
-                "UNKNOWN", "UNKNOWN", None,
+                "UNKNOWN",
+                "UNKNOWN",
+                None,
                 "Technical-analysis input must be a dictionary.",
             )
 
@@ -96,6 +106,7 @@ class MeanReversionStrategy(Strategy):
 
         indicators = analysis.get("indicators")
         metadata = analysis.get("metadata")
+
         if not isinstance(indicators, dict) or not isinstance(metadata, dict):
             return self._insufficient(
                 pair,
@@ -120,6 +131,7 @@ class MeanReversionStrategy(Strategy):
             )
 
         values = (rsi, close, middle, upper, lower)
+
         if any(
             not isinstance(value, (int, float))
             or isinstance(value, bool)
@@ -143,29 +155,60 @@ class MeanReversionStrategy(Strategy):
 
         conditions = (
             self._rsi_condition(rsi),
-            self._bollinger_condition(close, middle, upper, lower),
+            self._bollinger_condition(
+                close,
+                middle,
+                upper,
+                lower,
+            ),
         )
 
-        score = self._score(conditions)
+        evidence_score = self._score(conditions)
         agreement = self._agreement(conditions)
-        direction = self._direction(score, agreement)
-        rationale = self._rationale(direction, score, agreement, conditions)
+        direction = self._direction(
+            conditions,
+            evidence_score,
+            agreement,
+        )
+
+        # A neutral StrategySignal must carry zero directional score so the
+        # ensemble cannot accidentally treat partial evidence as a vote.
+        signal_score = evidence_score if direction != SignalDirection.NEUTRAL else 0.0
+
+        rationale = self._rationale(
+            direction,
+            signal_score,
+            evidence_score,
+            agreement,
+            conditions,
+        )
 
         signal = StrategySignal(
             direction=direction,
-            score=score,
+            score=signal_score,
             rationale=rationale,
             conditions=conditions,
             metadata={
-                "scoring": "conflict_aware_weighted_extremes",
+                "scoring": "confirmation_gated_weighted_extremes",
+                "confirmation_policy": "all_required_same_direction",
                 "minimum_score": self.parameters["minimum_score"],
                 "minimum_agreement": self.parameters["minimum_agreement"],
                 "agreement": round(agreement, 6),
+                "evidence_score": round(evidence_score, 6),
                 "latest_close": close,
                 "bollinger_middle": middle,
                 "bollinger_upper": upper,
                 "bollinger_lower": lower,
             },
+        )
+
+        satisfied_count = sum(
+            condition.status == ConditionStatus.SATISFIED
+            for condition in conditions
+        )
+        unavailable_count = sum(
+            condition.status == ConditionStatus.UNAVAILABLE
+            for condition in conditions
         )
 
         return StrategyEvaluation(
@@ -176,25 +219,20 @@ class MeanReversionStrategy(Strategy):
             timestamp_utc=timestamp,
             signal=signal,
             condition_count=len(conditions),
-            satisfied_count=sum(
-                condition.status == ConditionStatus.SATISFIED
-                for condition in conditions
-            ),
-            unavailable_count=sum(
-                condition.status == ConditionStatus.UNAVAILABLE
-                for condition in conditions
-            ),
+            satisfied_count=satisfied_count,
+            unavailable_count=unavailable_count,
             metadata={
                 "latest_close": close,
                 "rsi": rsi,
                 "bollinger_middle": middle,
                 "bollinger_upper": upper,
                 "bollinger_lower": lower,
-                "complete": all(
-                    condition.status != ConditionStatus.UNAVAILABLE
-                    for condition in conditions
-                ),
+                "complete": unavailable_count == 0,
+                "confirmed": direction != SignalDirection.NEUTRAL,
+                "confirmation_policy": "all_required_same_direction",
                 "decision_policy": "extreme_reversion_confirmation",
+                "evidence_score": round(evidence_score, 6),
+                "agreement": round(agreement, 6),
             },
         )
 
@@ -209,7 +247,7 @@ class MeanReversionStrategy(Strategy):
             expected = f"RSI >= {self.parameters['rsi_overbought_min']:.1f}"
         else:
             direction = None
-            status = ConditionStatus.UNAVAILABLE
+            status = ConditionStatus.NOT_SATISFIED
             expected = (
                 f"RSI <= {self.parameters['rsi_oversold_max']:.1f} or "
                 f"RSI >= {self.parameters['rsi_overbought_min']:.1f}"
@@ -244,7 +282,7 @@ class MeanReversionStrategy(Strategy):
             expected = "close >= upper Bollinger Band"
         else:
             direction = None
-            status = ConditionStatus.UNAVAILABLE
+            status = ConditionStatus.NOT_SATISFIED
             expected = "close at/beyond a Bollinger Band"
 
         return StrategyCondition(
@@ -266,34 +304,51 @@ class MeanReversionStrategy(Strategy):
 
     @staticmethod
     def _score(conditions: tuple[StrategyCondition, ...]) -> float:
+        """Calculate directional evidence without making a signal decision.
+
+        This preserves the weighted-evidence diagnostic while deliberately
+        keeping it separate from confirmation. In particular, a single
+        satisfied condition may produce a non-zero evidence score, but
+        _direction() is still required to approve the final signal.
+        """
         available = [
             condition
             for condition in conditions
-            if condition.status != ConditionStatus.UNAVAILABLE
+            if condition.status == ConditionStatus.SATISFIED
             and condition.direction is not None
             and condition.weight > 0
         ]
+
         total_weight = sum(condition.weight for condition in available)
+
         if total_weight == 0:
             return 0.0
 
         total = sum(
             condition.weight
-            * (1.0 if condition.direction == SignalDirection.LONG else -1.0)
+            * (
+                1.0
+                if condition.direction == SignalDirection.LONG
+                else -1.0
+            )
             for condition in available
         )
+
         return max(-1.0, min(1.0, total / total_weight))
 
     @staticmethod
     def _agreement(conditions: tuple[StrategyCondition, ...]) -> float:
+        """Measure agreement among satisfied directional conditions."""
         available = [
             condition
             for condition in conditions
-            if condition.status != ConditionStatus.UNAVAILABLE
+            if condition.status == ConditionStatus.SATISFIED
             and condition.direction is not None
             and condition.weight > 0
         ]
+
         total_weight = sum(condition.weight for condition in available)
+
         if total_weight == 0:
             return 0.0
 
@@ -307,23 +362,52 @@ class MeanReversionStrategy(Strategy):
             for condition in available
             if condition.direction == SignalDirection.SHORT
         )
+
         return max(long_weight, short_weight) / total_weight
 
-    def _direction(self, score: float, agreement: float) -> SignalDirection:
+    def _direction(
+        self,
+        conditions: tuple[StrategyCondition, ...],
+        score: float,
+        agreement: float,
+    ) -> SignalDirection:
+        """Apply the strict all-required confirmation policy.
+
+        Score and agreement are necessary diagnostics, but neither can
+        override the explicit requirement that both RSI and Bollinger
+        conditions are satisfied in the same direction.
+        """
+        if len(conditions) != 2:
+            return SignalDirection.NEUTRAL
+
+        rsi_condition, bollinger_condition = conditions
+
+        if (
+            rsi_condition.status != ConditionStatus.SATISFIED
+            or bollinger_condition.status != ConditionStatus.SATISFIED
+        ):
+            return SignalDirection.NEUTRAL
+
+        if (
+            rsi_condition.direction is None
+            or bollinger_condition.direction is None
+            or rsi_condition.direction != bollinger_condition.direction
+        ):
+            return SignalDirection.NEUTRAL
+
         if abs(score) < self.parameters["minimum_score"]:
             return SignalDirection.NEUTRAL
+
         if agreement < self.parameters["minimum_agreement"]:
             return SignalDirection.NEUTRAL
-        if score > 0:
-            return SignalDirection.LONG
-        if score < 0:
-            return SignalDirection.SHORT
-        return SignalDirection.NEUTRAL
+
+        return rsi_condition.direction
 
     @staticmethod
     def _rationale(
         direction: SignalDirection,
-        score: float,
+        signal_score: float,
+        evidence_score: float,
         agreement: float,
         conditions: tuple[StrategyCondition, ...],
     ) -> str:
@@ -335,15 +419,28 @@ class MeanReversionStrategy(Strategy):
             condition.status == ConditionStatus.UNAVAILABLE
             for condition in conditions
         )
+        not_satisfied = sum(
+            condition.status == ConditionStatus.NOT_SATISFIED
+            for condition in conditions
+        )
+
         if direction == SignalDirection.NEUTRAL:
             return (
-                "No sufficiently aligned mean-reversion conclusion; "
-                f"score={score:.3f}, agreement={agreement:.3f}, "
-                f"satisfied={satisfied}/{len(conditions)}, unavailable={unavailable}."
+                "No confirmed mean-reversion setup; both RSI and Bollinger "
+                "extremes must be satisfied in the same direction. "
+                f"signal_score={signal_score:.3f}, "
+                f"evidence_score={evidence_score:.3f}, "
+                f"agreement={agreement:.3f}, "
+                f"satisfied={satisfied}/{len(conditions)}, "
+                f"not_satisfied={not_satisfied}, "
+                f"unavailable={unavailable}."
             )
+
         return (
-            f"{direction.value} mean-reversion conclusion from extreme-price "
-            f"evidence; score={score:.3f}, agreement={agreement:.3f}, "
+            f"{direction.value} mean-reversion confirmation: RSI extreme "
+            "and corresponding Bollinger Band extreme agree. "
+            f"signal_score={signal_score:.3f}, "
+            f"agreement={agreement:.3f}, "
             f"satisfied={satisfied}/{len(conditions)}."
         )
 
@@ -376,8 +473,10 @@ class MeanReversionStrategy(Strategy):
             "rsi_weight",
             "bollinger_weight",
         )
+
         for key in numeric:
             value = self.parameters[key]
+
             if (
                 not isinstance(value, (int, float))
                 or isinstance(value, bool)
@@ -389,20 +488,27 @@ class MeanReversionStrategy(Strategy):
 
         if not 0 <= self.parameters["minimum_score"] <= 1:
             raise ValueError("minimum_score must be between 0 and 1")
+
         if not 0 <= self.parameters["minimum_agreement"] <= 1:
             raise ValueError("minimum_agreement must be between 0 and 1")
+
         if not (
-            0 < self.parameters["rsi_oversold_max"] < 50
-            < self.parameters["rsi_overbought_min"] <= 100
+            0
+            <= self.parameters["rsi_oversold_max"]
+            < 50
+            < self.parameters["rsi_overbought_min"]
+            <= 100
         ):
             raise ValueError(
                 "RSI extreme thresholds must be ordered around 50"
             )
+
         if any(
             self.parameters[key] < 0
             for key in ("rsi_weight", "bollinger_weight")
         ):
             raise ValueError("strategy weights cannot be negative")
+
         if (
             self.parameters["rsi_weight"]
             + self.parameters["bollinger_weight"]

@@ -1,18 +1,8 @@
 {
     "session_id": "ctx_701b6d2ff88d",
     "created_at": "2026-08-24T19:20:04.753072Z",
-    "updated_at": "2026-09-03T08:37:43.367924Z",
+    "updated_at": "2026-09-08T21:52:35.210162Z",
     "conversation": [
-        {
-            "role": "user",
-            "content": "open edge",
-            "timestamp": "2026-08-28T09:57:03.214850Z"
-        },
-        {
-            "role": "assistant",
-            "content": "Microsoft Edge has been successfully launched.",
-            "timestamp": "2026-08-28T09:57:11.343877Z"
-        },
         {
             "role": "user",
             "content": "open chrome",
@@ -102,6 +92,16 @@
             "role": "assistant",
             "content": "The list of folders in your desktop is as follows: Benvin, Desktop, Documents, Downloads, Music, Pictures, Videos.",
             "timestamp": "2026-09-03T08:37:43.367909Z"
+        },
+        {
+            "role": "user",
+            "content": "list folders in desktop",
+            "timestamp": "2026-09-08T21:51:08.178926Z"
+        },
+        {
+            "role": "assistant",
+            "content": "The list of folders in your desktop is as follows: Benvin, Desktop, Documents, Downloads, Music, Pictures, Videos.",
+            "timestamp": "2026-09-08T21:52:35.210139Z"
         }
     ],
     "current_task": {

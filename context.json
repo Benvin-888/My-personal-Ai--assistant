@@ -1,18 +1,8 @@
 {
     "session_id": "ctx_701b6d2ff88d",
     "created_at": "2026-08-24T19:20:04.753072Z",
-    "updated_at": "2026-09-08T21:52:35.210162Z",
+    "updated_at": "2026-09-11T13:08:05.483848Z",
     "conversation": [
-        {
-            "role": "user",
-            "content": "open chrome",
-            "timestamp": "2026-08-28T09:57:16.490514Z"
-        },
-        {
-            "role": "assistant",
-            "content": "Google Chrome has been launched successfully.",
-            "timestamp": "2026-08-28T09:57:23.931702Z"
-        },
         {
             "role": "user",
             "content": "is my computer healthy?",
@@ -102,6 +92,16 @@
             "role": "assistant",
             "content": "The list of folders in your desktop is as follows: Benvin, Desktop, Documents, Downloads, Music, Pictures, Videos.",
             "timestamp": "2026-09-08T21:52:35.210139Z"
+        },
+        {
+            "role": "user",
+            "content": "hi",
+            "timestamp": "2026-09-11T13:08:01.328838Z"
+        },
+        {
+            "role": "assistant",
+            "content": "I encountered an internal AI engine error. Reason: Could not connect to Ollama. Make sure Ollama is running.",
+            "timestamp": "2026-09-11T13:08:05.483808Z"
         }
     ],
     "current_task": {

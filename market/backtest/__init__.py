@@ -8,6 +8,7 @@ from .replay import HistoricalReplayEngine, HistoricalReplayError
 from .trade import TradeAccountState, TradeAction, TradeEvent, TradeRecord, TradeSimulationError, TradeSimulationResult, TradeSimulator
 from .metrics import BacktestMetricsCalculator, BacktestMetricsError, BacktestPerformanceMetrics, calculate_performance
 from .reporting import BacktestReport, BacktestReportBuilder, BacktestReportingError, EquityPoint, build_report
+from .risk_aware import (IntrabarPolicy, LevelProvider, OpportunityProvider, RiskAwareBacktestConfig, RiskAwareBacktestEngine, RiskAwareBacktestError, RiskAwareBacktestResult, RiskAwareEvent, RiskAwareTrade, RiskAwareTradeStatus, run_risk_aware_backtest)
 from .orchestration import BacktestOrchestrationError, BacktestOrchestrator, SignalProvider, run_backtest
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     'TradeSimulationError','TradeSimulationResult','TradeSimulator','BacktestMetricsCalculator','BacktestMetricsError',
     'BacktestPerformanceMetrics','calculate_performance','BacktestReport','BacktestReportBuilder','BacktestReportingError',
     'EquityPoint','build_report','BacktestOrchestrationError','BacktestOrchestrator','SignalProvider','run_backtest',
+    'IntrabarPolicy','LevelProvider','OpportunityProvider','RiskAwareBacktestConfig','RiskAwareBacktestEngine','RiskAwareBacktestError','RiskAwareBacktestResult','RiskAwareEvent','RiskAwareTrade','RiskAwareTradeStatus','run_risk_aware_backtest',
     'BacktestIntegrityValidator','BacktestValidationCheck','BacktestValidationError','BacktestValidationResult','BacktestValidationStatus','validate_backtest',
 ]
 from .validation import BacktestIntegrityValidator, BacktestValidationCheck, BacktestValidationError, BacktestValidationResult, BacktestValidationStatus, validate_backtest

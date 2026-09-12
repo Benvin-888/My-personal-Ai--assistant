@@ -1,4 +1,5 @@
-"""APEX / BENVIN backtesting release version."""
+"""Backward-compatible access to the package version metadata."""
 
-__version__ = "2.9.0"
-__release__ = "Strategy Research & Robustness"
+from ..research.version import __release__, __version__
+
+__all__ = ["__version__", "__release__"]

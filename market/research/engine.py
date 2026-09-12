@@ -57,6 +57,8 @@ class ResearchPerformance:
     total_transaction_costs: float
     recovery_factor: float | None
     calmar_like_ratio: float | None
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +74,8 @@ class ResearchPerformance:
             "max_drawdown": self.max_drawdown,
             "max_drawdown_pct": self.max_drawdown_pct,
             "total_transaction_costs": self.total_transaction_costs,
+            "gross_profit": self.gross_profit,
+            "gross_loss": self.gross_loss,
             "recovery_factor": self.recovery_factor,
             "calmar_like_ratio": self.calmar_like_ratio,
         }
@@ -262,6 +266,8 @@ class StrategyResearchEngine:
             max_drawdown=float(result.max_drawdown),
             max_drawdown_pct=float(result.max_drawdown_pct),
             total_transaction_costs=float(result.total_transaction_costs),
+            gross_profit=float(result.gross_profit),
+            gross_loss=float(result.gross_loss),
             recovery_factor=recovery,
             calmar_like_ratio=calmar,
         )

@@ -1,3 +1,5 @@
+import pytest
+
 """
 APEX / BENVIN Market Data Tests
 
@@ -26,8 +28,6 @@ These tests do NOT:
     - test trading strategies
 """
 
-import pytest
-
 from .cache import MarketDataCache
 from .provider import normalize_forex_pair
 from .service import MarketDataService
@@ -39,14 +39,6 @@ from .service import MarketDataService
 
 PASSED = 0
 FAILED = 0
-
-
-def require_live_result(result):
-    """Return a live-provider result or skip when the external service is unavailable."""
-    if result.get("success") is not True:
-        reason = result.get("error") or "market-data provider unavailable"
-        pytest.skip(f"live market-data provider unavailable: {reason}")
-    return result
 
 
 def run_test(name, test_function):
@@ -185,7 +177,7 @@ def test_current_quote():
 
     assert isinstance(result, dict)
 
-    result = require_live_result(result)
+    assert result.get("success") is True
     assert result.get("market") == "forex"
     assert result.get("pair") == "EURUSD"
     assert result.get("provider") == "Yahoo Finance"
@@ -246,7 +238,7 @@ def test_historical_data():
 
     assert isinstance(result, dict)
 
-    result = require_live_result(result)
+    assert result.get("success") is True
     assert result.get("market") == "forex"
     assert result.get("pair") == "EURUSD"
     assert result.get("interval") == "5m"
@@ -360,7 +352,7 @@ def test_historical_chronology():
         limit=100
     )
 
-    result = require_live_result(result)
+    assert result.get("success") is True
 
     candles = result.get("candles")
 
@@ -401,7 +393,7 @@ def test_historical_ohlc_relationships():
         limit=100
     )
 
-    result = require_live_result(result)
+    assert result.get("success") is True
 
     candles = result.get("candles")
 

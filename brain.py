@@ -519,22 +519,27 @@ def _resolve_contextual_path():
         dict
     ):
 
-        for key in (
-            "path",
-            "directory",
-            "search_root"
-        ):
+        # context.py stores tool results as {"result": payload, "timestamp": ...}.
+        # Accept both the wrapped form and legacy direct payloads so contextual
+        # filesystem requests remain compatible across saved sessions.
+        result_payload = last_result.get("result", last_result)
+        if isinstance(result_payload, dict):
+            for key in (
+                "path",
+                "directory",
+                "search_root"
+            ):
 
-            value = last_result.get(
-                key
-            )
+                value = result_payload.get(
+                    key
+                )
 
-            if isinstance(
-                value,
-                str
-            ) and value.strip():
+                if isinstance(
+                    value,
+                    str
+                ) and value.strip():
 
-                return value.strip()
+                    return value.strip()
 
     return None
 

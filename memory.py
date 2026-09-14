@@ -3,9 +3,11 @@ import os
 import uuid
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 
-MEMORY_FILE = "memory.json"
+BASE_DIR = Path(__file__).resolve().parent
+MEMORY_FILE = str(BASE_DIR / "memory.json")
 
 
 # ============================================================
@@ -343,18 +345,25 @@ def save_memory(memory):
     Save memories to memory.json.
     """
 
+    temp_file = f"{MEMORY_FILE}.tmp"
     with open(
-        MEMORY_FILE,
+        temp_file,
         "w",
         encoding="utf-8"
     ) as file:
-
         json.dump(
             memory,
             file,
             indent=4,
             ensure_ascii=False
         )
+        file.flush()
+        try:
+            os.fsync(file.fileno())
+        except OSError:
+            # Best-effort flush on filesystems that do not implement fsync.
+            pass
+    os.replace(temp_file, MEMORY_FILE)
 
 
 # ============================================================

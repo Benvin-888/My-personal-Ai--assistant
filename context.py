@@ -31,13 +31,15 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-CONTEXT_FILE = "context.json"
+BASE_DIR = Path(__file__).resolve().parent
+CONTEXT_FILE = str(BASE_DIR / "context.json")
 
 MAX_MESSAGES = 20
 
@@ -184,18 +186,25 @@ def save_context(context):
         current_timestamp()
     )
 
+    temp_file = f"{CONTEXT_FILE}.tmp"
     with open(
-        CONTEXT_FILE,
+        temp_file,
         "w",
         encoding="utf-8"
     ) as file:
-
         json.dump(
             context,
             file,
             indent=4,
             ensure_ascii=False
         )
+        file.flush()
+        try:
+            os.fsync(file.fileno())
+        except OSError:
+            # Best-effort flush on filesystems that do not implement fsync.
+            pass
+    os.replace(temp_file, CONTEXT_FILE)
 
 
 # ============================================================

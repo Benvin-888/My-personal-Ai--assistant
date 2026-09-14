@@ -1,4 +1,4 @@
 """APEX / BENVIN market package version metadata."""
 
-__version__ = "2.21.0"
-__release__ = "Paper Trading Forward Evidence"
+__version__ = "2.24.0"
+__release__ = "Deriv Demo Connectivity & Controlled Execution"

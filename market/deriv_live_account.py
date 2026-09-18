@@ -240,27 +240,59 @@ class DerivLiveAccountConnectivity:
                     message="Deriv rejected the authenticated real-account request",
                     network_access_performed=True,
                 )
+            if response.get("msg_type") != "balance":
+                return DerivLiveConnectivityResult(
+                    connected=True,
+                    real_endpoint_verified=True,
+                    authenticated=False,
+                    balance_verified=False,
+                    account_id=config.account_id,
+                    currency=None,
+                    message="Real WebSocket connected, but response was not a balance response",
+                    network_access_performed=True,
+                )
             balance = response.get("balance")
             if not isinstance(balance, Mapping):
                 return DerivLiveConnectivityResult(
                     connected=True,
                     real_endpoint_verified=True,
-                    authenticated=True,
+                    authenticated=False,
                     balance_verified=False,
                     account_id=config.account_id,
                     currency=None,
-                    message="Real WebSocket connected, but no valid balance response was returned",
+                    message="Real WebSocket connected, but no valid balance object was returned",
                     network_access_performed=True,
                 )
+            amount = balance.get("balance")
             currency = balance.get("currency")
-            currency = currency if isinstance(currency, str) else None
+            login_id = balance.get("loginid")
+            if (
+                isinstance(amount, bool)
+                or not isinstance(amount, (int, float))
+                or amount < 0
+                or not isinstance(currency, str)
+                or not currency.strip()
+                or not isinstance(login_id, str)
+                or not login_id.strip()
+                or login_id.strip() != config.account_id.strip()
+            ):
+                return DerivLiveConnectivityResult(
+                    connected=True,
+                    real_endpoint_verified=True,
+                    authenticated=False,
+                    balance_verified=False,
+                    account_id=config.account_id,
+                    currency=currency.strip() if isinstance(currency, str) and currency.strip() else None,
+                    message="Real WebSocket returned an invalid or mismatched balance identity",
+                    network_access_performed=True,
+                )
             return DerivLiveConnectivityResult(
                 connected=True,
                 real_endpoint_verified=True,
                 authenticated=True,
                 balance_verified=True,
                 account_id=config.account_id,
-                currency=currency,
+                currency=currency.strip(),
                 message="Real Deriv account authenticated and read-only balance verified",
                 network_access_performed=True,
             )

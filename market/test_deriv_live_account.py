@@ -20,7 +20,7 @@ class FakeRest:
 
 class FakeWS:
     def __init__(self, response=None):
-        self.response = response or {"msg_type": "balance", "balance": {"currency": "USD", "balance": 100}}
+        self.response = response or {"msg_type": "balance", "balance": {"currency": "USD", "balance": 100, "loginid": "REAL123"}}
         self.calls = []
 
     def request_balance(self, websocket_url, timeout):
@@ -109,8 +109,29 @@ def test_read_only_verification_requires_balance_object():
     ws = FakeWS({"msg_type": "balance"})
     result = DerivLiveAccountConnectivity(rest_transport=rest, websocket_transport=ws).verify_read_only(config())
     assert result.connected is True
-    assert result.authenticated is True
+    assert result.authenticated is False
     assert result.balance_verified is False
+
+
+def test_read_only_verification_requires_balance_message_type():
+    rest = FakeRest()
+    ws = FakeWS({"msg_type": "authorize", "balance": {"currency": "USD", "balance": 100, "loginid": "REAL123"}})
+    result = DerivLiveAccountConnectivity(rest_transport=rest, websocket_transport=ws).verify_read_only(config())
+    assert result.authenticated is False
+    assert result.balance_verified is False
+
+
+def test_read_only_verification_requires_numeric_nonnegative_balance_and_identity():
+    rest = FakeRest()
+    for payload in (
+        {"msg_type": "balance", "balance": {"currency": "USD", "balance": "100", "loginid": "REAL123"}},
+        {"msg_type": "balance", "balance": {"currency": "USD", "balance": -1, "loginid": "REAL123"}},
+        {"msg_type": "balance", "balance": {"currency": "USD", "balance": 100, "loginid": "OTHER"}},
+        {"msg_type": "balance", "balance": {"currency": "", "balance": 100, "loginid": "REAL123"}},
+    ):
+        result = DerivLiveAccountConnectivity(rest_transport=rest, websocket_transport=FakeWS(payload)).verify_read_only(config())
+        assert result.authenticated is False
+        assert result.balance_verified is False
 
 
 def test_otp_failure_is_reported_without_secret_exposure():

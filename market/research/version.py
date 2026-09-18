@@ -1,3 +1,3 @@
 """Research package version metadata."""
-__version__ = "2.21.0"
-__release__ = "Paper Trading Forward Evidence"
+__version__ = "2.39.0"
+__release__ = "Deriv Live Execution Adapter"

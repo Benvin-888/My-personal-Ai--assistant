@@ -1,6 +1,7 @@
 """Conservative, direction-aware EMA/RSI/MACD strategy."""
 
 from math import isfinite
+from typing import Any, Mapping
 
 from ..base import Strategy
 from ..models import (
@@ -30,14 +31,17 @@ class TrendMomentumStrategy(Strategy):
         "macd_weight": 0.20,
     }
 
-    def __init__(self, parameters=None):
-        self.parameters = {**self.DEFAULTS, **(parameters or {})}
+    def __init__(self, parameters: Mapping[str, Any] | None = None):
+        if parameters is not None and not isinstance(parameters, Mapping):
+            raise ValueError("parameters must be a mapping")
+
+        self.parameters = {**self.DEFAULTS, **dict(parameters or {})}
         self._validate()
 
         self._definition = StrategyDefinition(
             strategy_id="trend_momentum",
             name="Trend Momentum",
-            version="1.1.1",
+            version="1.1.2",
             description=(
                 "Deterministic EMA trend, EMA alignment, RSI and direction-aware "
                 "MACD confirmation with conflict-aware conservative scoring."
@@ -60,6 +64,14 @@ class TrendMomentumStrategy(Strategy):
         return self._definition
 
     def evaluate(self, analysis):
+        if not isinstance(analysis, dict):
+            return self._insufficient(
+                "UNKNOWN",
+                "UNKNOWN",
+                None,
+                "Technical-analysis input must be a dictionary.",
+            )
+
         pair = str(analysis.get("pair", "UNKNOWN"))
         interval = str(analysis.get("interval", "UNKNOWN"))
         timestamp = analysis.get("latest_timestamp_utc")
@@ -67,6 +79,7 @@ class TrendMomentumStrategy(Strategy):
 
         if (
             not isinstance(candle_count, int)
+            or isinstance(candle_count, bool)
             or candle_count < self.definition.minimum_candles
         ):
             return self._insufficient(
@@ -158,9 +171,14 @@ class TrendMomentumStrategy(Strategy):
             conditions,
         )
 
+        # A neutral StrategySignal must carry zero directional score so the
+        # ensemble cannot accidentally treat a rejected/partial setup as a
+        # vote (mirrors the mean-reversion strategy's confirmation gating).
+        signal_score = score if direction != SignalDirection.NEUTRAL else 0.0
+
         signal = StrategySignal(
             direction,
-            score,
+            signal_score,
             rationale,
             tuple(conditions),
             self._signal_metadata(score, agreement, observed_bias),

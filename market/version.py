@@ -1,3 +1,3 @@
 """APEX / BENVIN market package version metadata."""
-__version__ = "2.35.0"
-__release__ = "Real Deriv Account Connectivity"
+__version__ = "2.39.0"
+__release__ = "Deriv Live Execution Adapter"

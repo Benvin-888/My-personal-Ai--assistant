@@ -1,3 +1,3 @@
 """Research package version metadata."""
-__version__ = "2.39.0"
-__release__ = "Deriv Live Execution Adapter"
+__version__ = "2.46.0"
+__release__ = "Real MongoDB Connection & Persistence Verification"

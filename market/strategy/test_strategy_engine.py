@@ -161,7 +161,7 @@ def test_invalid_strategy_parameters_are_rejected():
 def test_evaluation_preserves_strategy_identity_and_timeframe():
     r = StrategyEngine([TrendMomentumStrategy()]).evaluate("trend_momentum", analysis())
     assert r["strategy_id"] == "trend_momentum"
-    assert r["strategy_version"] == "1.1.1"
+    assert r["strategy_version"] == "1.1.2"
     assert r["interval"] == "5m"
     assert r["timeframe"] == "5m"
 

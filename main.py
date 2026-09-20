@@ -53,6 +53,14 @@ from brain import (
     respond_to_action_result
 )
 
+from market.brain_market_service import (
+    BrainMarketQuery,
+    BrainMarketQueryError,
+    BrainMarketQueryService,
+)
+
+from uuid import uuid4
+
 from context import (
     add_message,
     set_last_action,
@@ -627,6 +635,61 @@ def handle_action(intent):
 
 
 # ============================================================
+# HANDLE MARKET READ
+# ============================================================
+
+def handle_market_read(intent):
+    """Run one explicit, read-only Brain -> Market query."""
+
+    parameters = intent.get("parameters", {})
+    try:
+        query = BrainMarketQuery(
+            request_id=f"brain-market-{uuid4().hex}",
+            pair=parameters.get("pair", ""),
+            interval=parameters.get("interval", "5m"),
+            data_range=parameters.get("data_range", "1d"),
+        )
+        result = BrainMarketQueryService().evaluate(query)
+    except (BrainMarketQueryError, ValueError) as error:
+        message = f"I couldn't safely evaluate that market request: {error}"
+        print(f"BENVIN: {message}")
+        store_assistant_response(message)
+        return
+    except Exception as error:
+        message = "The read-only market analysis failed before producing a result."
+        print(f"BENVIN: {message}")
+        print(f"Reason: {error}")
+        store_assistant_response(f"{message} Reason: {error}")
+        return
+
+    payload = result.to_dict()
+    if not result.success:
+        message = f"Market analysis could not be completed: {result.error}"
+        print(f"BENVIN: {message}")
+        store_assistant_response(message)
+        return
+
+    intelligence = payload.get("market_intelligence", {})
+    opportunity = intelligence.get("opportunity", {})
+    status = opportunity.get("status", "UNKNOWN")
+    direction = opportunity.get("direction", "NEUTRAL")
+    score = opportunity.get("score")
+
+    message = (
+        f"Read-only market analysis completed for {result.query.normalized_pair} "
+        f"({result.query.interval}) via {result.provider}. "
+        f"Opportunity status: {status}; direction: {direction}."
+    )
+    if score is not None:
+        message += f" Score: {score}."
+    message += " No trade was authorized or executed."
+
+    print(f"BENVIN: {message}")
+    print(f"Evidence fingerprint: {intelligence.get('evidence_fingerprint', '')}")
+    store_assistant_response(message)
+
+
+# ============================================================
 # HANDLE INTENT
 # ============================================================
 
@@ -658,6 +721,18 @@ def handle_intent(intent):
     intent_type = intent.get(
         "type"
     )
+
+    # --------------------------------------------------------
+    # Market read
+    # --------------------------------------------------------
+
+    if intent_type == "market_read":
+
+        handle_market_read(
+            intent
+        )
+
+        return
 
     # --------------------------------------------------------
     # Conversation

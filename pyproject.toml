@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apex-market"
-version = "2.39.0"
+version = "2.46.0"
 description = "Provider-agnostic market data, analysis, strategy research, risk and backtesting toolkit."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31,<3",
     "websocket-client>=1.7,<2",
+    "pymongo>=4.8,<5",
+    "python-dotenv>=1.0,<2",
 ]
 
 [project.optional-dependencies]

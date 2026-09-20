@@ -1069,6 +1069,49 @@ def _contains_context_reference(text):
 
 
 # ============================================================
+# DETERMINISTIC MARKET READ ROUTER
+# ============================================================
+
+def _build_deterministic_market_intent(user_input):
+    """Create a read-only market-analysis intent for explicit market queries.
+
+    This router never fetches market data and never executes a trade.
+    It only creates a structured request for main.py to pass to the
+    dedicated Brain -> Market read-only service.
+    """
+
+    text = _normalize_text(user_input)
+    if not text:
+        return None
+
+    patterns = (
+        r"^(?:analyze|analyse|check|show|get) (?:the )?market(?: for)? ([a-z]{3}(?:[/\- ]?[a-z]{3}))(?: (?:on )?([0-9]+[mhd]))?$",
+        r"^(?:analyze|analyse|check) ([a-z]{3}(?:[/\-]?[a-z]{3})) ([0-9]+[mhd])$",
+    )
+
+    for pattern in patterns:
+        match = re.fullmatch(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+
+        pair = match.group(1).replace("/", "").replace("-", "").replace(" ", "").upper()
+        interval = match.group(2) or "5m"
+        if len(pair) != 6 or not pair.isalpha():
+            return None
+
+        return {
+            "type": "market_read",
+            "parameters": {
+                "pair": pair,
+                "interval": interval,
+                "data_range": "1d",
+            },
+        }
+
+    return None
+
+
+# ============================================================
 # DETERMINISTIC ACTION ROUTER
 # ============================================================
 
@@ -1911,6 +1954,23 @@ def _normalize_intent(intent):
             "parameters": parameters
         }
 
+    if intent_type == "market_read":
+
+        parameters = intent.get(
+            "parameters"
+        )
+
+        if not isinstance(
+            parameters,
+            dict
+        ):
+            return None
+
+        return {
+            "type": "market_read",
+            "parameters": parameters
+        }
+
     return None
 
 
@@ -1978,6 +2038,18 @@ def validate_intent_shape(intent):
             return False
 
         return True
+
+    if intent_type == "market_read":
+        parameters = intent.get("parameters")
+        if not isinstance(parameters, dict):
+            return False
+        pair = parameters.get("pair")
+        interval = parameters.get("interval")
+        data_range = parameters.get("data_range")
+        return all(
+            isinstance(value, str) and bool(value.strip())
+            for value in (pair, interval, data_range)
+        )
 
     return False
 
@@ -2135,6 +2207,28 @@ def analyze_intent(user_input):
     # ========================================================
     # DETERMINISTIC ROUTING
     # ========================================================
+
+    deterministic_market_intent = (
+        _build_deterministic_market_intent(
+            user_input
+        )
+    )
+
+    if deterministic_market_intent is not None:
+
+        if not validate_intent_shape(
+            deterministic_market_intent
+        ):
+
+            return {
+                "type": "error",
+                "error": (
+                    "The deterministic market router "
+                    "produced an invalid intent."
+                )
+            }
+
+        return deterministic_market_intent
 
     deterministic_intent = (
         _build_deterministic_action_intent(

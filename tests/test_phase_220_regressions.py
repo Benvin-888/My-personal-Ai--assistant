@@ -65,6 +65,6 @@ def test_context_resolver_reads_wrapped_tool_result(monkeypatch):
 
 
 def test_versions_are_consistent():
-    assert __version__ == "2.37.0"
+    assert __version__ == "2.46.0"
     assert research_version == __version__
     assert backtest_version == __version__

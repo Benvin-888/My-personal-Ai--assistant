@@ -7,6 +7,7 @@ from market.mongodb_journal import MongoTradeJournal
 class FakeCollection:
     def __init__(self):
         self.docs = {}
+        self.indexes = {}
 
     def replace_one(self, query, document, upsert=False):
         assert upsert is True
@@ -14,6 +15,11 @@ class FakeCollection:
 
     def find_one(self, query):
         return self.docs.get(query["_id"])
+
+    def create_index(self, keys, name=None):
+        assert keys and keys[0][1] == 1
+        self.indexes[name] = tuple(keys)
+        return name
 
 
 class FakeDatabase:
@@ -100,3 +106,23 @@ def test_health_check_sanitizes_connection_errors():
     with pytest.raises(RuntimeError, match="connection verification failed") as exc_info:
         MongoTradeJournal(FailingClient()).health_check()
     assert "secret" not in str(exc_info.value)
+
+
+def test_ensure_indexes_creates_declared_indexes():
+    journal = MongoTradeJournal(FakeClient())
+    names = journal.ensure_indexes()
+    assert names == (
+        "evidence_fingerprint_1",
+        "symbol_1",
+        "timestamp_1",
+        "status_1",
+    )
+    assert set(journal.collection.indexes) == set(names)
+
+
+def test_schema_normalizes_stable_trade_id():
+    journal = MongoTradeJournal(FakeClient())
+    assert journal.save({"trade_id": "  T-002  "}) == "T-002"
+    stored = journal.get("T-002")
+    assert stored["trade_id"] == "T-002"
+    assert stored["_id"] == "T-002"

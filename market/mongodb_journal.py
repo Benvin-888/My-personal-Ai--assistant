@@ -5,12 +5,13 @@ from collections.abc import Mapping
 from typing import Any
 
 from .mongodb_config import get_mongodb_database, get_mongodb_uri
+from .mongodb_schema import TRADE_EVIDENCE_COLLECTION, TRADE_EVIDENCE_INDEXES, validate_trade_evidence
 
 
 class MongoTradeJournal:
     """Persist trade evidence; never grants execution authority."""
 
-    COLLECTION = "trade_evidence"
+    COLLECTION = TRADE_EVIDENCE_COLLECTION
     SERVER_SELECTION_TIMEOUT_MS = 5000
 
     def __init__(self, client: Any | None = None) -> None:
@@ -53,12 +54,17 @@ class MongoTradeJournal:
             raise RuntimeError("MongoDB connection verification returned an invalid ping response")
         return True
 
+    def ensure_indexes(self) -> tuple[str, ...]:
+        """Create the stable evidence indexes and return their names."""
+        collection = self.collection
+        names: list[str] = []
+        for field, name in TRADE_EVIDENCE_INDEXES:
+            names.append(str(collection.create_index([(field, 1)], name=name)))
+        return tuple(names)
+
     def save(self, evidence: Mapping[str, Any]) -> str:
-        document = dict(evidence)
-        trade_id = str(document.get("trade_id", "")).strip()
-        if not trade_id:
-            raise ValueError("trade_id is required")
-        document["_id"] = trade_id
+        document = validate_trade_evidence(evidence)
+        trade_id = document["trade_id"]
         self.collection.replace_one({"_id": trade_id}, document, upsert=True)
         return trade_id
 

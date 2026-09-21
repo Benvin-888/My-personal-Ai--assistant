@@ -1,3 +1,3 @@
-"""Research package version metadata."""
-__version__ = "2.46.0"
-__release__ = "Real MongoDB Connection & Persistence Verification"
+"""APEX / BENVIN package version metadata."""
+__version__ = "2.49.0"
+__release__ = "MongoDB Trade Evidence Performance Analytics Foundation"

@@ -1,3 +1,3 @@
 """APEX / BENVIN package version metadata."""
-__version__ = "2.49.0"
-__release__ = "MongoDB Trade Evidence Performance Analytics Foundation"
+__version__ = "2.57.0"
+__release__ = "Statistical Robustness Engine"

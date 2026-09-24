@@ -1,6 +1,7 @@
-Phase 2.41 — Brain/Market Read-Only Integration Boundary
+BENVIN/APEX Phase 2.63 — Portfolio & Exposure Control
 
-Apply over the verified Phase 2.40 baseline.
-Contains only new/modified files.
+Changed files only. Extract over the existing Benvin project while preserving paths.
 
-No live execution is enabled or required for verification.
+Purpose: deterministic portfolio/exposure assessment before downstream risk and execution controls.
+
+No broker execution or credential access is introduced.

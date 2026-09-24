@@ -1,2 +1,2 @@
-__version__ = "2.61.0"
-__release__ = "Forward Evidence Engine"
+__version__ = "2.65.0"
+__release__ = "Strategy Degradation Detection"

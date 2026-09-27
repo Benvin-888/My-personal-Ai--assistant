@@ -1,0 +1,43 @@
+BENVIN/APEX Phase 2.76 — Execution Contract Integrity
+
+Baseline: Phase 2.75 working-tree baseline from uploaded Benvin(7).zip
+Version: 2.76.0
+
+Purpose:
+- Harden Decision -> Reservation -> Execution Request semantic integrity.
+- Verify exact execution terms against authoritative decision/reservation state.
+- Bind explicit approved execution policy to the immutable candidate.
+- Verify decision, reservation, and decision/reservation binding fingerprints.
+- Enforce timezone-aware decision/request/reservation expiry semantics.
+- Preserve execution_authorized=False.
+
+Files in this phase delta:
+- market/execution_request_bridge.py
+- market/test_execution_request_bridge.py
+- market/decision_admission.py
+- market/decision_reservation_integration.py
+- market/capital_risk_reservation_admission.py
+- market/version.py
+- pyproject.toml
+- tests/test_phase_220_regressions.py
+- doc/RELEASE_2_76_EXECUTION_CONTRACT_INTEGRITY.md
+- BUILD_MANIFEST_PHASE_2_76.txt
+
+Verification performed:
+- python -m py_compile market/execution_request_bridge.py market/decision_admission.py market/decision_reservation_integration.py market/capital_risk_reservation_admission.py
+- python -m compileall -q .
+- python -m pytest market/test_execution_request_bridge.py -q -> 22 passed
+- python -m pytest market/test_decision_admission.py market/test_decision_reservation_integration.py market/test_capital_risk_reservation.py market/test_capital_risk_reservation_admission.py market/test_execution_request_bridge.py -q -> 79 passed
+- python -m pytest market -q -> 1309 passed, 5 deselected
+- python -m pytest -q -> 1315 passed, 5 deselected
+- market version = 2.76.0
+- pyproject version = 2.76.0
+
+Safety:
+- No broker/network execution was performed.
+- No Deriv credentials were read or used.
+- Phase 2.76 does not authorize or place trades.
+- The downstream Validator -> Permissions -> Executor -> Execution Gateway boundary remains mandatory.
+
+Next planned phase:
+Phase 2.77 — Unified Execution Admission / Dispatch Coordinator.

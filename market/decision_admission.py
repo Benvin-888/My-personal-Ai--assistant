@@ -11,7 +11,8 @@ an external execution boundary.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import hashlib
 import json
@@ -223,9 +224,9 @@ def evaluate_decision_admission(
     if not _expiry_is_valid(context, elapsed_seconds, criteria.decision_ttl_seconds):
         status = AdmissionStatus.EXPIRED if not invalid else AdmissionStatus.INVALID
         reason = "decision_expired" if not invalid else "invalid_context"
-        return _build_admission(context, status, (), (reason,), safety, evidence=context.evidence_fingerprint)
+        return _build_admission(context, status, (), (reason,), safety, evidence=context.evidence_fingerprint, ttl_seconds=criteria.decision_ttl_seconds)
     if invalid:
-        return _build_admission(context, AdmissionStatus.INVALID, (), invalid, safety, evidence=context.evidence_fingerprint)
+        return _build_admission(context, AdmissionStatus.INVALID, (), invalid, safety, evidence=context.evidence_fingerprint, ttl_seconds=criteria.decision_ttl_seconds)
 
     stages = (
         _stage(DecisionStage.MARKET, market, criteria.require_market_pass),
@@ -257,21 +258,55 @@ def evaluate_decision_admission(
     else:
         status = AdmissionStatus.ADMITTED
 
-    return _build_admission(context, status, stages, reasons, safety, evidence=context.evidence_fingerprint)
+    return _build_admission(context, status, stages, reasons, safety, evidence=context.evidence_fingerprint, ttl_seconds=criteria.decision_ttl_seconds)
 
 
-def _build_admission(context: DecisionContext, status: AdmissionStatus, stages: Sequence[StageResult], reasons: Sequence[str], safety: Any, *, evidence: str) -> DecisionAdmission:
-    safety_state = _status(_read(safety, "state", default="UNKNOWN"))
-    payload = {
-        "decision_id": context.decision_id,
-        "candidate_id": context.candidate_id,
-        "status": status,
-        "stages": stages,
-        "reasons": tuple(sorted(set(reasons))),
-        "safety_state": safety_state,
-        "evidence": evidence,
+def _decision_expiry(observed_at: str, ttl_seconds: float) -> str:
+    parsed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("observed_at must include timezone information")
+    return (parsed + timedelta(seconds=ttl_seconds)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _decision_fingerprint_payload(admission: DecisionAdmission) -> dict[str, Any]:
+    return {
+        "decision_id": admission.decision_id,
+        "candidate_id": admission.candidate_id,
+        "status": admission.status,
+        "symbol": admission.symbol,
+        "timeframe": admission.timeframe,
+        "strategy_id": admission.strategy_id,
+        "strategy_version": admission.strategy_version,
+        "direction": admission.direction,
+        "quantity": admission.quantity,
+        "risk_amount": admission.risk_amount,
+        "observed_at": admission.observed_at,
+        "expires_at": admission.expires_at,
+        "stages": admission.stages,
+        "blocking_reasons": admission.blocking_reasons,
+        "evidence_fingerprint": admission.evidence_fingerprint,
+        "safety_state": admission.safety_state,
     }
-    return DecisionAdmission(
+
+
+def decision_admission_fingerprint_matches(admission: Any) -> bool:
+    """Verify the immutable decision fingerprint against all decision terms."""
+    if not isinstance(admission, DecisionAdmission) or not isinstance(admission.decision_fingerprint, str):
+        return False
+    try:
+        return admission.decision_fingerprint == _fingerprint(_decision_fingerprint_payload(admission))
+    except (TypeError, ValueError):
+        return False
+
+
+def _build_admission(context: DecisionContext, status: AdmissionStatus, stages: Sequence[StageResult], reasons: Sequence[str], safety: Any, *, evidence: str, ttl_seconds: float) -> DecisionAdmission:
+    safety_state = _status(_read(safety, "state", default="UNKNOWN"))
+    normalized_reasons = tuple(sorted(set(reasons)))
+    try:
+        expires_at = _decision_expiry(context.observed_at, ttl_seconds)
+    except (TypeError, ValueError, OverflowError):
+        expires_at = context.observed_at
+    admission_base = DecisionAdmission(
         decision_id=context.decision_id,
         candidate_id=context.candidate_id,
         status=status,
@@ -283,15 +318,16 @@ def _build_admission(context: DecisionContext, status: AdmissionStatus, stages: 
         quantity=context.quantity,
         risk_amount=context.risk_amount,
         observed_at=context.observed_at,
-        expires_at=f"{context.observed_at}+{status.value}",
+        expires_at=expires_at,
         stages=tuple(stages),
-        blocking_reasons=tuple(sorted(set(reasons))),
+        blocking_reasons=normalized_reasons,
         evidence_fingerprint=evidence,
-        decision_fingerprint=_fingerprint(payload),
+        decision_fingerprint="",
         safety_state=safety_state,
         execution_admission_allowed=status is AdmissionStatus.ADMITTED,
         execution_authorized=False,
     )
+    return replace(admission_base, decision_fingerprint=_fingerprint(_decision_fingerprint_payload(admission_base)))
 
 
 def final_safety_recheck_passes(admission: DecisionAdmission, safety: Any) -> bool:
